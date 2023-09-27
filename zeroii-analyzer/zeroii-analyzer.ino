@@ -4,8 +4,14 @@
 
 #define ZEROII_Reset_Pin  6
 #define ZERO_I2C_ADDRESS 0x5B
+#define CLK 2
+#define DT 3
+#define SW 5
 
 RigExpertZeroII_I2C zeroii = RigExpertZeroII_I2C();
+int currentStateCLK;
+int lastStateCLK;
+unsigned long lastButtonPress = 0;
 
 void setup() {
     Serial.begin(38400);
@@ -28,18 +34,79 @@ void setup() {
             ", SN: " + zeroii.getSerialNumber()
     );
 
-    analyze();
+    pinMode(CLK, INPUT);   // Set encoder pins as inputs
+    pinMode(DT, INPUT);
+    pinMode(SW, INPUT_PULLUP);
+    lastStateCLK = digitalRead(CLK);  // Read the initial state of CLK
 
     Serial.println("done");
 }
 
+#define STATE_WAITING 0
+#define STATE_MEASURING 1
+int state = STATE_WAITING;
+int32_t centerFq = 28400000; //300000000;// 148 000 000 Hz
 void loop() {
-    delay(500);
+    // TODO: allow choosing frequency and doing a measurement with encoder
+    if(state == STATE_WAITING) {
+        // rotating changes frequency
+        // clicking starts a measurement
+        currentStateCLK = digitalRead(CLK);  // Read the current state of CLK
+        if (currentStateCLK != lastStateCLK  && currentStateCLK == 1) {
+            // TODO: accelerate when turning a lot?
+            if (digitalRead(DT) != currentStateCLK) {
+                centerFq--;
+            } else {
+                centerFq++;
+            }
+            Serial.print("Center Frequency: ");
+            Serial.println(centerFq);
+        }
+        lastStateCLK = currentStateCLK;
+        int btnState = digitalRead(SW);
+        if (btnState == LOW) {
+            if (millis() - lastButtonPress > 50) {
+                Serial.println("Analyzing...");
+                state = STATE_MEASURING;
+                analyze(centerFq);
+                state = STATE_WAITING;
+            }
+            lastButtonPress = millis();
+        }
+    }
+    // TODO: if we're in a measurement, allow cancelling it by clicking
+    delay(1);
 }
 
-void analyze() {
+void analyze_frequency(int32_t fq) {
+    zeroii.startMeasure(fq);
+    Serial.print("Fq: ");
+    Serial.print(fq);
+    Serial.print(", R: ");
+    Serial.print(zeroii.getR());
+    Serial.print(", Rp: ");
+    Serial.print(zeroii.getRp());
+    Serial.print(", X: ");
+    Serial.print(zeroii.getX());
+    Serial.print(", Xp: ");
+    Serial.print(zeroii.getXp());
+    Serial.print(", SWR: ");
+    Serial.print(zeroii.getSWR());
+    Serial.print(", RL: ");
+    Serial.print(zeroii.getRL());
+    Serial.print(", Z: ");
+    Serial.print(zeroii.getZ());
+    Serial.print(", Phase: ");
+    Serial.print(zeroii.getPhase());
+    Serial.print(", Rho: ");
+    Serial.print(zeroii.getRho());
+    Serial.print(", Gamma: ");
+    Serial.print(compute_gamma(zeroii.getR(), zeroii.getX(), 50));
+    Serial.print("\r\n");
+}
+
+void analyze(int32_t centerFq) {
     double Z0 = 50;
-    int32_t centerFq = 28400000; //300000000;// 148 000 000 Hz
     int32_t rangeFq = 800000;//400000000;// 10 000 000 Hz
     int32_t dotsNumber = 100;
 
@@ -51,31 +118,7 @@ void analyze() {
 
     for(int i = 0; i <= dotsNumber; ++i)
     {
-        int32_t temp = startFq + (stepFq*i);
-        zeroii.startMeasure(temp);
-        Serial.print("Fq: ");
-        Serial.print(temp);
-        Serial.print(", R: ");
-        Serial.print(zeroii.getR());
-        Serial.print(", Rp: ");
-        Serial.print(zeroii.getRp());
-        Serial.print(", X: ");
-        Serial.print(zeroii.getX());
-        Serial.print(", Xp: ");
-        Serial.print(zeroii.getXp());
-        Serial.print(", SWR: ");
-        Serial.print(zeroii.getSWR());
-        Serial.print(", RL: ");
-        Serial.print(zeroii.getRL());
-        Serial.print(", Z: ");
-        Serial.print(zeroii.getZ());
-        Serial.print(", Phase: ");
-        Serial.print(zeroii.getPhase());
-        Serial.print(", Rho: ");
-        Serial.print(zeroii.getRho());
-        Serial.print(", Gamma: ");
-        Serial.print(compute_gamma(zeroii.getR(), zeroii.getX(), 50));
-        Serial.print("\r\n");
+        analyze_frequency(startFq + (stepFq*i));
     }
     Serial.print("------------------------\r\n");
 }
