@@ -2,16 +2,18 @@
 #include "Wire.h"
 #include "Complex.h"
 
+#include "analyzer.h"
+#include "rotary_encoder.h"
+
 #define ZEROII_Reset_Pin  6
 #define ZERO_I2C_ADDRESS 0x5B
 #define CLK 2
 #define DT 3
 #define SW 5
+#define Z0 50
 
-RigExpertZeroII_I2C zeroii = RigExpertZeroII_I2C();
-int currentStateCLK;
-int lastStateCLK;
-unsigned long lastButtonPress = 0;
+Analyzer analyzer(Z0);
+RotaryEncoder encoder(CLK, DT, SW);
 
 void setup() {
     Serial.begin(38400);
@@ -23,98 +25,113 @@ void setup() {
     delay(50);
     digitalWrite(ZEROII_Reset_Pin, HIGH);
 
-    if(!zeroii.startZeroII()) {
+    if(!analyzer.zeroii_.startZeroII()) {
         Serial.println("failed to start zeroii");
         return;
     }
 
     String str = "Version: ";
-    Serial.println(str + zeroii.getMajorVersion() + "." + zeroii.getMinorVersion() + 
-            ", HW Revision: " + zeroii.getHwRevision() + 
-            ", SN: " + zeroii.getSerialNumber()
+    Serial.println(str + analyzer.zeroii_.getMajorVersion() + "." + analyzer.zeroii_.getMinorVersion() +
+            ", HW Revision: " + analyzer.zeroii_.getHwRevision() +
+            ", SN: " + analyzer.zeroii_.getSerialNumber()
     );
 
-    pinMode(CLK, INPUT);   // Set encoder pins as inputs
-    pinMode(DT, INPUT);
-    pinMode(SW, INPUT_PULLUP);
-    lastStateCLK = digitalRead(CLK);  // Read the initial state of CLK
+    encoder.initialize();
 
     Serial.println("done");
 }
 
-#define STATE_WAITING 0
-#define STATE_MEASURING 1
-int state = STATE_WAITING;
+#define STATE_CALIBRATION 0
+#define STATE_CALIBRATION_S 1
+#define STATE_CALIBRATION_O 2
+#define STATE_CALIBRATION_L 3
+#define STATE_WAITING 4
+#define STATE_MEASURING 5
+
+int state = STATE_CALIBRATION;
+int clicks = 0;
 int32_t centerFq = 28400000; //300000000;// 148 000 000 Hz
 void loop() {
-    // TODO: allow choosing frequency and doing a measurement with encoder
-    if(state == STATE_WAITING) {
-        // rotating changes frequency
-        // clicking starts a measurement
-        currentStateCLK = digitalRead(CLK);  // Read the current state of CLK
-        if (currentStateCLK != lastStateCLK  && currentStateCLK == 1) {
-            // TODO: accelerate when turning a lot?
-            if (digitalRead(DT) != currentStateCLK) {
-                centerFq--;
-            } else {
-                centerFq++;
+    encoder.update();
+    switch(state) {
+        case STATE_CALIBRATION:
+            Serial.println("connect short and press knob");
+            state = STATE_CALIBRATION_S;
+            break;
+        case STATE_CALIBRATION_S:
+            if (encoder.click_) {
+                Serial.println(analyzer.calibrate_short(centerFq, Z0));
+                state = STATE_CALIBRATION_O;
+                Serial.println("connect open and press knob");
             }
-            Serial.print("Center Frequency: ");
-            Serial.println(centerFq);
-        }
-        lastStateCLK = currentStateCLK;
-        int btnState = digitalRead(SW);
-        if (btnState == LOW) {
-            if (millis() - lastButtonPress > 50) {
+            break;
+        case STATE_CALIBRATION_O:
+            if (encoder.click_) {
+                Serial.println(analyzer.calibrate_open(centerFq, Z0));
+                state = STATE_CALIBRATION_L;
+                Serial.println("connect load and press knob");
+            }
+            break;
+        case STATE_CALIBRATION_L:
+            if (encoder.click_) {
+                Serial.println(analyzer.calibrate_load(centerFq, Z0));
+                state = STATE_WAITING;
+                Serial.println("done calibrating.");
+            }
+            break;
+        case STATE_WAITING:
+            // rotating changes frequency
+            if (encoder.turn_ != 0) {
+                if(encoder.turn_ < 0) {
+                    centerFq--;
+                } else if(encoder.turn_ > 0) {
+                    centerFq++;
+                }
+                Serial.print("Center Frequency: ");
+                Serial.println(centerFq);
+            }
+            // clicking starts a measurement
+            if (encoder.click_) {
                 Serial.println("Analyzing...");
                 state = STATE_MEASURING;
                 analyze(centerFq);
                 state = STATE_WAITING;
             }
-            lastButtonPress = millis();
-        }
+            break;
+    }
+    if (encoder.click_) {
+        Serial.print("click: ");
+        Serial.println(++clicks);
     }
     // TODO: if we're in a measurement, allow cancelling it by clicking
     delay(1);
 }
 
 void analyze_frequency(int32_t fq) {
-    zeroii.startMeasure(fq);
+    Complex uncal_z = analyzer.uncalibrated_measure(fq);
+    Complex cal_gamma = analyzer.calibrated_gamma(uncal_z);
+    float SWR = compute_swr(cal_gamma);
+
     Serial.print("Fq: ");
     Serial.print(fq);
-    Serial.print(", R: ");
-    Serial.print(zeroii.getR());
-    Serial.print(", Rp: ");
-    Serial.print(zeroii.getRp());
-    Serial.print(", X: ");
-    Serial.print(zeroii.getX());
-    Serial.print(", Xp: ");
-    Serial.print(zeroii.getXp());
-    Serial.print(", SWR: ");
-    Serial.print(zeroii.getSWR());
-    Serial.print(", RL: ");
-    Serial.print(zeroii.getRL());
-    Serial.print(", Z: ");
-    Serial.print(zeroii.getZ());
-    Serial.print(", Phase: ");
-    Serial.print(zeroii.getPhase());
-    Serial.print(", Rho: ");
-    Serial.print(zeroii.getRho());
     Serial.print(", Gamma: ");
-    Serial.print(compute_gamma(zeroii.getR(), zeroii.getX(), 50));
+    Serial.print(cal_gamma);
+    Serial.print(", Z: ");
+    Serial.print(compute_z(cal_gamma, Z0));
+    Serial.print(", SWR: ");
+    Serial.print(SWR);
+    Serial.print(", Zuncal: ");
+    Serial.print(uncal_z);
     Serial.print("\r\n");
 }
 
 void analyze(int32_t centerFq) {
-    double Z0 = 50;
     int32_t rangeFq = 800000;//400000000;// 10 000 000 Hz
     int32_t dotsNumber = 100;
 
     int32_t startFq = centerFq - (rangeFq/2);
     int32_t endFq = centerFq + (rangeFq/2);
     int32_t stepFq = (endFq - startFq)/dotsNumber;
-
-    zeroii.setZ0(50);
 
     for(int i = 0; i <= dotsNumber; ++i)
     {
@@ -123,6 +140,7 @@ void analyze(int32_t centerFq) {
     Serial.print("------------------------\r\n");
 }
 
+/*
 Complex compute_gamma(float r, float x, float z0_real) {
     // gamma = (z - z0) / (z + z0)
     // z = r + xj
@@ -154,9 +172,12 @@ float reactance(Complex v) {
     float zi = 2*im * d;
     return zi;
 }
+*/
 
 /*
 // some thoughts on getting capacitance/inductance
+// X = - 1/(2*pi*f*C)
+// X = 2*pi*f*L
 // courtesy nanovna-v2/NanoVNA-QT
 inline double capacitance_inductance(double freq, double Z) {
     if(Z>0) return Z/(2*M_PI*freq);
