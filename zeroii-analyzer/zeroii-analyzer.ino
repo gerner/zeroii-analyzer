@@ -6,6 +6,11 @@
 #include "rotary_encoder.h"
 #include "menu_manager.h"
 
+//100kHz
+#define MIN_FQ 100000
+//1GHz
+#define MAX_FQ 1000000000
+
 #define ZEROII_Reset_Pin  6
 #define ZERO_I2C_ADDRESS 0x5B
 #define CLK 2
@@ -21,10 +26,14 @@ RotaryEncoder encoder(CLK, DT, SW);
 #define MOPT_CALIBRATE 3
 #define MOPT_FQCENTER 4
 #define MOPT_FQWINDOW 5
-#define MOPT_FQSTEPS 6
-#define MOPT_BACK 7
+#define MOPT_FQSTART 6
+#define MOPT_FQEND 7
+#define MOPT_FQSTEPS 8
+#define MOPT_BACK 9
 
 MenuOption fq_menu_options[] = {
+    MenuOption("Fq Start", MOPT_FQSTART, NULL),
+    MenuOption("Fq End", MOPT_FQEND, NULL),
     MenuOption("Fq Center", MOPT_FQCENTER, NULL),
     MenuOption("Fq Range", MOPT_FQWINDOW, NULL),
     MenuOption("Steps", MOPT_FQSTEPS, NULL),
@@ -41,8 +50,8 @@ Menu root_menu(NULL, root_menu_options, sizeof(root_menu_options)/sizeof(root_me
 
 MenuManager menu_manager(&root_menu);
 
-int32_t centerFq = 28400000; //300000000;// 148 000 000 Hz
-int32_t rangeFq = 800000;//400000000;// 10 000 000 Hz
+int32_t startFq = 28300000;
+int32_t endFq = 28500000;
 int32_t dotsNumber = 100;
 
 #define CAL_START 0
@@ -53,7 +62,6 @@ int32_t dotsNumber = 100;
 int calibration_state = CAL_START;
 
 void draw_menu(Menu* current_menu, int current_option) {
-    Serial.println(menu_manager.current_option_);
     for(int i=0; i<current_menu->option_count; i++) {
         // either:
         // this is the current option
@@ -76,6 +84,24 @@ void draw_menu(Menu* current_menu, int current_option) {
 void menu_back() {
     menu_manager.collapse();
     draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
+}
+
+int32_t set_user_value(int32_t current_value, int32_t min_value, int32_t max_value, String label) {
+    // clicking backs out of this option
+    if (encoder.click_) {
+        menu_back();
+        return current_value;
+    }
+    // rotating changes value
+    if (encoder.turn_ != 0) {
+        int32_t inc = encoder.acceleration();
+        int32_t updated_value = constrain(current_value + inc, min_value, max_value);
+        Serial.print(label);
+        Serial.print(": ");
+        Serial.println(updated_value);
+        return updated_value;
+    }
+    return current_value;
 }
 
 void handle_waiting() {
@@ -104,56 +130,32 @@ void handle_waiting() {
             break;
         case MOPT_ANALYZE:
             Serial.println("Analyzing...");
-            analyze(centerFq);
+            analyze(startFq, endFq);
             menu_back();
             break;
-        case MOPT_FQCENTER:
-            // clicking backs out of this option
-            if (encoder.click_) {
-                menu_back();
-            }
-            // rotating changes frequency
-            if (encoder.turn_ != 0) {
-                if(encoder.turn_ < 0) {
-                    centerFq--;
-                } else if(encoder.turn_ > 0) {
-                    centerFq++;
-                }
-                Serial.print("Center Frequency: ");
-                Serial.println(centerFq);
-            }
+        case MOPT_FQCENTER: {
+            // move [startFq, endFq] so it's centered on desired value
+            int32_t centerFq = set_user_value(startFq + (endFq-startFq)/2, MIN_FQ, MAX_FQ, "Center Frequency");
+            startFq = constrain(centerFq - (endFq - startFq)/2, MIN_FQ, MAX_FQ);
+            endFq = constrain(centerFq + (endFq - startFq)/2, MIN_FQ, MAX_FQ);
             break;
-        case MOPT_FQWINDOW:
-            // clicking backs out of this option
-            if (encoder.click_) {
-                menu_back();
-            }
-            // rotating changes window size
-            if (encoder.turn_ != 0) {
-                if(encoder.turn_ < 0) {
-                    rangeFq--;
-                } else if(encoder.turn_ > 0) {
-                    rangeFq++;
-                }
-                Serial.print("Frequency Range: ");
-                Serial.println(rangeFq);
-            }
+        }
+        case MOPT_FQWINDOW: {
+            // narrow/expand [startFq, endFq] remaining centered
+            int32_t rangeFq = set_user_value(endFq - startFq, 0, MAX_FQ/2, "Frequency Range");
+            int32_t cntFq = startFq + (endFq - startFq)/2;
+            startFq = constrain(cntFq - rangeFq/2, MIN_FQ, MAX_FQ);
+            endFq = constrain(cntFq + rangeFq/2, MIN_FQ, MAX_FQ);
+            break;
+        }
+        case MOPT_FQSTART:
+            startFq = set_user_value(startFq, MIN_FQ, MAX_FQ, "Start Frequency");
+            break;
+        case MOPT_FQEND:
+            endFq = set_user_value(endFq, MIN_FQ, MAX_FQ, "End Frequency");
             break;
         case MOPT_FQSTEPS:
-            // clicking backs out of this option
-            if (encoder.click_) {
-                menu_back();
-            }
-            // rotating changes window size
-            if (encoder.turn_ != 0) {
-                if(encoder.turn_ < 0) {
-                    dotsNumber--;
-                } else if(encoder.turn_ > 0) {
-                    dotsNumber++;
-                }
-                Serial.print("Steps: ");
-                Serial.println(dotsNumber);
-            }
+            dotsNumber = set_user_value(dotsNumber, 1, 128, "Steps");
             break;
         case MOPT_CALIBRATE:
             calibration_state = calibration_step(calibration_state);
@@ -161,6 +163,8 @@ void handle_waiting() {
                 menu_back();
                 calibration_state = CAL_START;
             }
+            break;
+        default:
             break;
     }
 }
@@ -219,10 +223,8 @@ void analyze_frequency(int32_t fq) {
     Serial.print("\r\n");
 }
 
-void analyze(int32_t centerFq) {
+void analyze(int32_t startFq, int32_t endFq) {
 
-    int32_t startFq = centerFq - (rangeFq/2);
-    int32_t endFq = centerFq + (rangeFq/2);
     int32_t stepFq = (endFq - startFq)/dotsNumber;
 
     for(int i = 0; i <= dotsNumber; ++i)
@@ -240,21 +242,21 @@ int calibration_step(int calibration_state) {
             break;
         case CAL_S:
             if (encoder.click_) {
-                Serial.println(analyzer.calibrate_short(centerFq, Z0));
+                Serial.println(analyzer.calibrate_short((endFq-startFq)/2, Z0));
                 Serial.println("connect open and press knob");
                 return CAL_O;
             }
             break;
         case CAL_O:
             if (encoder.click_) {
-                Serial.println(analyzer.calibrate_open(centerFq, Z0));
+                Serial.println(analyzer.calibrate_open((endFq-startFq)/2, Z0));
                 Serial.println("connect load and press knob");
                 return CAL_L;
             }
             break;
         case CAL_L:
             if (encoder.click_) {
-                Serial.println(analyzer.calibrate_load(centerFq, Z0));
+                Serial.println(analyzer.calibrate_load((endFq-startFq)/2, Z0));
                 Serial.println("done calibrating.");
                 return CAL_END;
             }

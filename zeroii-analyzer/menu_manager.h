@@ -52,11 +52,11 @@ class MenuManager {
         }
 
         void select_up() {
-            select(current_menu_->selected_option-1);
+            select(current_menu_->selected_option+1);
         }
 
         void select_down() {
-            select(current_menu_->selected_option+1);
+            select(current_menu_->selected_option-1);
         }
 
         void expand() {
