@@ -17,5 +17,7 @@ I could power the thing.
 
 I ended up using I2C and not flashing the firmware (contrary to the
 [RigExpert guide](https://rigexpert.com/news/zero-ii-the-tiny-and-powerful-analyzer/))
+# Dependencies
 
-
+* `RigExpertZeroII_I2C` my version of it
+* `MD_REncoder`

@@ -3,8 +3,40 @@
 #include "Complex.h"
 
 #include "analyzer.h"
-#include "rotary_encoder.h"
+//#include "rotary_encoder.h"
+#include "MD_REncoder.h"
 #include "menu_manager.h"
+
+class Button {
+    public:
+        Button(int SW) {
+            SW_ = SW;
+            press_ = false;
+            last_button_press_ = 0;
+        }
+        void begin() {
+            pinMode(SW_, INPUT_PULLUP);
+        }
+        bool read() {
+            bool click = false;
+            if (digitalRead(SW_) == LOW) {
+                uint32_t now = millis();
+                if (!press_ && now - last_button_press_ > 100) {
+                    click = true;
+                }
+                press_ = true;
+                last_button_press_ = now;
+            } else {
+                press_ = false;
+            }
+            return click;
+        }
+    private:
+        int SW_;
+        bool press_;
+        uint32_t last_button_press_;
+
+};
 
 //100kHz
 #define MIN_FQ 100000
@@ -19,7 +51,11 @@
 #define Z0 50
 
 Analyzer analyzer(Z0);
-RotaryEncoder encoder(CLK, DT, SW);
+MD_REncoder encoder(CLK, DT);
+Button button(SW);
+
+int turn = 0;
+bool click = false;
 
 #define MOPT_ANALYZE 1
 #define MOPT_FQ 2
@@ -86,22 +122,67 @@ void menu_back() {
     draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
 }
 
-int32_t set_user_value(int32_t current_value, int32_t min_value, int32_t max_value, String label) {
+typedef String (*int_formatter) (const int32_t);
+String decimal_int_formatter(const int32_t v) {
+    return String(v);
+}
+
+int32_t set_user_value(int32_t current_value, int32_t min_value, int32_t max_value, String label, int32_t multiplier=1, int_formatter formatter=&decimal_int_formatter) {
     // clicking backs out of this option
-    if (encoder.click_) {
+    if (click) {
         menu_back();
         return current_value;
     }
     // rotating changes value
-    if (encoder.turn_ != 0) {
-        int32_t inc = encoder.acceleration();
+    if (turn != 0) {
+        // inc scales with how fast you're turning it
+        // inc is direction * 2 ^ speed / 10
+        int32_t inc = turn * (uint32_t(1) << (uint32_t(encoder.speed()/5))) * multiplier;
         int32_t updated_value = constrain(current_value + inc, min_value, max_value);
         Serial.print(label);
         Serial.print(": ");
-        Serial.println(updated_value);
+        Serial.println(formatter(updated_value));
         return updated_value;
     }
     return current_value;
+}
+
+uint16_t frequency_step(uint32_t fq) {
+    if (fq > 1 * 1000 * 1000 * 1000) {
+        return 1 * 1000 * 1000;
+    } else if (fq > 1 * 1000 * 1000) {
+        return 1 * 1000;
+    } else if (fq > 1 * 1000) {
+        return 1;
+    } else {
+        return 1;
+    }
+}
+
+String frequency_formatter(const int32_t fq) {
+    int int_part, dec_part;
+    char buf[3+1+3+3+1];
+    if (fq > 1ll * 1000ll * 1000ll * 1000ll) {
+        int_part = fq / 1000ll / 1000ll / 1000ll;
+        dec_part = fq / 1000ll / 1000ll % 1000ll;
+        snprintf(buf, sizeof(buf), "%d.%03dGHz", int_part, dec_part);
+        return String(buf);
+    } else if (fq > 1ll * 1000ll * 1000ll) {
+        int_part = fq / 1000ll / 1000ll;
+        dec_part = fq / 1000ll % 1000ll;
+        snprintf(buf, sizeof(buf), "%d.%03dMHz", int_part, dec_part);
+        return String(buf);
+    } else if (fq > 1ll * 1000ll) {
+        int_part = fq / 1000ll;
+        dec_part = fq % 1000ll;
+        snprintf(buf, sizeof(buf), "%d.%03dkHz", int_part, dec_part);
+        return String(buf);
+    } else {
+        int_part = fq;
+        dec_part = 0;
+        snprintf(buf, sizeof(buf), "%d.%03dHz", int_part, dec_part);
+        return String(buf);
+    }
 }
 
 void handle_waiting() {
@@ -109,15 +190,15 @@ void handle_waiting() {
         case -1:
             // clicking does whatever the cursor is on in the menu
             // we'll handle that action on the next loop
-            if (encoder.click_) {
+            if (click) {
                 menu_manager.expand();
                 draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
             }
-            if (encoder.turn_ != 0) {
-                if(encoder.turn_ < 0) {
+            if (turn != 0) {
+                if(turn < 0) {
                     menu_manager.select_down();
                     draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
-                } else if(encoder.turn_ > 0) {
+                } else if(turn > 0) {
                     menu_manager.select_up();
                     draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
                 }
@@ -135,24 +216,28 @@ void handle_waiting() {
             break;
         case MOPT_FQCENTER: {
             // move [startFq, endFq] so it's centered on desired value
-            int32_t centerFq = set_user_value(startFq + (endFq-startFq)/2, MIN_FQ, MAX_FQ, "Center Frequency");
+            int32_t centerFq = startFq + (endFq-startFq)/2;
+            centerFq = set_user_value(centerFq, MIN_FQ, MAX_FQ, "Center Frequency", frequency_step(centerFq), &frequency_formatter);
             startFq = constrain(centerFq - (endFq - startFq)/2, MIN_FQ, MAX_FQ);
             endFq = constrain(centerFq + (endFq - startFq)/2, MIN_FQ, MAX_FQ);
             break;
         }
         case MOPT_FQWINDOW: {
             // narrow/expand [startFq, endFq] remaining centered
-            int32_t rangeFq = set_user_value(endFq - startFq, 0, MAX_FQ/2, "Frequency Range");
+            int32_t rangeFq = endFq - startFq;
+            rangeFq = set_user_value(rangeFq, 0, MAX_FQ/2, "Frequency Range", frequency_step(rangeFq), &frequency_formatter);
             int32_t cntFq = startFq + (endFq - startFq)/2;
             startFq = constrain(cntFq - rangeFq/2, MIN_FQ, MAX_FQ);
             endFq = constrain(cntFq + rangeFq/2, MIN_FQ, MAX_FQ);
             break;
         }
         case MOPT_FQSTART:
-            startFq = set_user_value(startFq, MIN_FQ, MAX_FQ, "Start Frequency");
+            startFq = set_user_value(startFq, MIN_FQ, MAX_FQ, "Start Frequency", frequency_step(startFq), &frequency_formatter);
+            endFq = constrain(endFq, startFq+frequency_step(startFq), MAX_FQ);
             break;
         case MOPT_FQEND:
-            endFq = set_user_value(endFq, MIN_FQ, MAX_FQ, "End Frequency");
+            endFq = set_user_value(endFq, MIN_FQ, MAX_FQ, "End Frequency", frequency_step(endFq), &frequency_formatter);
+            startFq = constrain(startFq, MIN_FQ, endFq-frequency_step(endFq));
             break;
         case MOPT_FQSTEPS:
             dotsNumber = set_user_value(dotsNumber, 1, 128, "Steps");
@@ -191,7 +276,8 @@ void setup() {
             ", SN: " + analyzer.zeroii_.getSerialNumber()
     );
 
-    encoder.initialize();
+    encoder.setPeriod(200);
+    encoder.begin();
 
     Serial.println("done");
 
@@ -199,7 +285,15 @@ void setup() {
 }
 
 void loop() {
-    encoder.update();
+    uint8_t encoder_state = encoder.read();
+    if (encoder_state == DIR_CW) {
+        turn = -1;
+    } else if(encoder_state == DIR_CCW) {
+        turn = 1;
+    } else {
+        turn = 0;
+    }
+    click = button.read();
     handle_waiting();
     // TODO: if we're in a measurement, allow cancelling it by clicking
     delay(1);
@@ -241,21 +335,21 @@ int calibration_step(int calibration_state) {
             return CAL_S;
             break;
         case CAL_S:
-            if (encoder.click_) {
+            if (click) {
                 Serial.println(analyzer.calibrate_short((endFq-startFq)/2, Z0));
                 Serial.println("connect open and press knob");
                 return CAL_O;
             }
             break;
         case CAL_O:
-            if (encoder.click_) {
+            if (click) {
                 Serial.println(analyzer.calibrate_open((endFq-startFq)/2, Z0));
                 Serial.println("connect load and press knob");
                 return CAL_L;
             }
             break;
         case CAL_L:
-            if (encoder.click_) {
+            if (click) {
                 Serial.println(analyzer.calibrate_load((endFq-startFq)/2, Z0));
                 Serial.println("done calibrating.");
                 return CAL_END;
