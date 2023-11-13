@@ -1,42 +1,42 @@
 #include "RigExpertZeroII_I2C.h"
-#include "Wire.h"
 #include "Complex.h"
+#include "MD_REncoder.h"
+
+#include <Adafruit_GFX.h>    // Core graphics library
+#include <SPI.h>
+#include "Adafruit_HX8357.h"
+#include "TouchScreen.h"
 
 #include "analyzer.h"
-//#include "rotary_encoder.h"
-#include "MD_REncoder.h"
 #include "menu_manager.h"
+#include "button.h"
 
-class Button {
-    public:
-        Button(int SW) {
-            SW_ = SW;
-            press_ = false;
-            last_button_press_ = 0;
-        }
-        void begin() {
-            pinMode(SW_, INPUT_PULLUP);
-        }
-        bool read() {
-            bool click = false;
-            if (digitalRead(SW_) == LOW) {
-                uint32_t now = millis();
-                if (!press_ && now - last_button_press_ > 100) {
-                    click = true;
-                }
-                press_ = true;
-                last_button_press_ = now;
-            } else {
-                press_ = false;
-            }
-            return click;
-        }
-    private:
-        int SW_;
-        bool press_;
-        uint32_t last_button_press_;
+// These are the four touchscreen analog pins
+#define YP A2  // must be an analog pin, use "An" notation!
+#define XM A3  // must be an analog pin, use "An" notation!
+#define YM 7   // can be a digital pin
+#define XP 8   // can be a digital pin
 
-};
+// This is calibration data for the raw touch data to the screen coordinates
+#define TS_MINX 110
+#define TS_MINY 80
+#define TS_MAXX 900
+#define TS_MAXY 940
+
+#define MINPRESSURE 10
+#define MAXPRESSURE 1000
+
+// The display uses hardware SPI, plus #9 & #10
+#define TFT_RST -1  // dont use a reset pin, tie to arduino RST if you like
+#define TFT_DC 9
+#define TFT_CS 10
+
+Adafruit_HX8357 tft = Adafruit_HX8357(TFT_CS, TFT_DC, TFT_RST);
+
+// For better pressure precision, we need to know the resistance
+// between X+ and X- Use any multimeter to read it
+// For the one we're using, its 300 ohms across the X plate
+TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 
 //100kHz
 #define MIN_FQ 100000
@@ -54,7 +54,7 @@ Analyzer analyzer(Z0);
 MD_REncoder encoder(CLK, DT);
 Button button(SW);
 
-int turn = 0;
+int8_t turn = 0;
 bool click = false;
 
 #define MOPT_ANALYZE 1
@@ -95,7 +95,7 @@ int32_t dotsNumber = 100;
 #define CAL_O 2
 #define CAL_L 3
 #define CAL_END 4
-int calibration_state = CAL_START;
+uint8_t calibration_state = CAL_START;
 
 void draw_menu(Menu* current_menu, int current_option) {
     for(int i=0; i<current_menu->option_count; i++) {
@@ -162,19 +162,19 @@ uint16_t frequency_step(uint32_t fq) {
 String frequency_formatter(const int32_t fq) {
     int int_part, dec_part;
     char buf[3+1+3+3+1];
-    if (fq > 1ll * 1000ll * 1000ll * 1000ll) {
-        int_part = fq / 1000ll / 1000ll / 1000ll;
-        dec_part = fq / 1000ll / 1000ll % 1000ll;
+    if (fq > 1ul * 1000ul * 1000ul * 1000ul) {
+        int_part = fq / 1000ul / 1000ul / 1000ul;
+        dec_part = fq / 1000ul / 1000ul % 1000ul;
         snprintf(buf, sizeof(buf), "%d.%03dGHz", int_part, dec_part);
         return String(buf);
-    } else if (fq > 1ll * 1000ll * 1000ll) {
-        int_part = fq / 1000ll / 1000ll;
-        dec_part = fq / 1000ll % 1000ll;
+    } else if (fq > 1ul * 1000ul * 1000ul) {
+        int_part = fq / 1000ul / 1000ul;
+        dec_part = fq / 1000ul % 1000ul;
         snprintf(buf, sizeof(buf), "%d.%03dMHz", int_part, dec_part);
         return String(buf);
-    } else if (fq > 1ll * 1000ll) {
-        int_part = fq / 1000ll;
-        dec_part = fq % 1000ll;
+    } else if (fq > 1ul * 1000ul) {
+        int_part = fq / 1000ul;
+        dec_part = fq % 1000ul;
         snprintf(buf, sizeof(buf), "%d.%03dkHz", int_part, dec_part);
         return String(buf);
     } else {
@@ -278,6 +278,7 @@ void setup() {
 
     encoder.setPeriod(200);
     encoder.begin();
+    button.begin();
 
     Serial.println("done");
 
@@ -328,7 +329,7 @@ void analyze(int32_t startFq, int32_t endFq) {
     Serial.print("------------------------\r\n");
 }
 
-int calibration_step(int calibration_state) {
+uint8_t calibration_step(uint8_t calibration_state) {
     switch(calibration_state) {
         case CAL_START:
             Serial.println("connect short and press knob");
