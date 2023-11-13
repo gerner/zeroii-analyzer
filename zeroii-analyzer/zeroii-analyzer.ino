@@ -31,7 +31,15 @@
 #define TFT_DC 9
 #define TFT_CS 10
 
+#define TFT_ROTATION 1
+
 Adafruit_HX8357 tft = Adafruit_HX8357(TFT_CS, TFT_DC, TFT_RST);
+
+// Some display configs
+#define TITLE_TEXT_SIZE 2
+#define MENU_TEXT_SIZE 2
+#define MENU_ORIG_X 0
+#define MENU_ORIG_Y TITLE_TEXT_SIZE*8*2
 
 // For better pressure precision, we need to know the resistance
 // between X+ and X- Use any multimeter to read it
@@ -97,7 +105,7 @@ int32_t dotsNumber = 100;
 #define CAL_END 4
 uint8_t calibration_state = CAL_START;
 
-void draw_menu(Menu* current_menu, int current_option) {
+/*void draw_menu(Menu* current_menu, int current_option) {
     for(int i=0; i<current_menu->option_count; i++) {
         // either:
         // this is the current option
@@ -115,9 +123,58 @@ void draw_menu(Menu* current_menu, int current_option) {
         Serial.print("]");
     }
     Serial.println();
+}*/
+
+void draw_title() {
+    tft.setCursor(0,0);
+    tft.setTextSize(TITLE_TEXT_SIZE);
+
+    tft.print(frequency_formatter(startFq) + " to " + frequency_formatter(endFq));
+    tft.print(" Steps: ");
+    tft.print(dotsNumber);
 }
 
+void clear_menu(Menu* current_menu) {
+    int16_t w = 1;
+    int16_t h = 8*current_menu->option_count*MENU_TEXT_SIZE;
+    for(int i=0; i<current_menu->option_count; i++) {
+        if(current_menu->options[i].label.length()+1 > w) {
+            w = current_menu->options[i].label.length()+1;
+        }
+    }
+    w = 6*MENU_TEXT_SIZE*w;
+    tft.fillRect(MENU_ORIG_X, MENU_ORIG_Y, w, h, HX8357_BLACK);
+}
+
+// draws menu on the tft
+void draw_menu(Menu* current_menu, int current_option, bool fresh=true) {
+    if (fresh) {
+        clear_menu(current_menu);
+    } else {
+        // just blank the cursor area
+        tft.fillRect(MENU_ORIG_X, MENU_ORIG_Y, 6*MENU_TEXT_SIZE, 8*current_menu->option_count*MENU_TEXT_SIZE, HX8357_BLACK);
+    }
+    tft.setCursor(MENU_ORIG_X, MENU_ORIG_Y);
+    tft.setTextSize(MENU_TEXT_SIZE);
+    for(int i=0; i<current_menu->option_count; i++) {
+        // either:
+        // this is the current option
+        // this is the selected option
+        // this is just an option
+        if (current_option >= 0 && current_menu->options[i].option_id == current_option) {
+            tft.print("+");
+        } else if(current_menu->selected_option == i) {
+            tft.print(">");
+        } else {
+            tft.print(" ");
+        }
+        tft.println(current_menu->options[i].label);
+    }
+}
+
+
 void menu_back() {
+    clear_menu(menu_manager.current_menu_);
     menu_manager.collapse();
     draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
 }
@@ -130,6 +187,8 @@ String decimal_int_formatter(const int32_t v) {
 int32_t set_user_value(int32_t current_value, int32_t min_value, int32_t max_value, String label, int32_t multiplier=1, int_formatter formatter=&decimal_int_formatter) {
     // clicking backs out of this option
     if (click) {
+        tft.fillScreen(HX8357_BLACK);
+        draw_title();
         menu_back();
         return current_value;
     }
@@ -137,11 +196,15 @@ int32_t set_user_value(int32_t current_value, int32_t min_value, int32_t max_val
     if (turn != 0) {
         // inc scales with how fast you're turning it
         // inc is direction * 2 ^ speed / 10
-        int32_t inc = turn * (uint32_t(1) << (uint32_t(encoder.speed()/5))) * multiplier;
+        int32_t inc = turn * (uint32_t(1) << (uint32_t(encoder.speed()/2))) * multiplier;
         int32_t updated_value = constrain(current_value + inc, min_value, max_value);
-        Serial.print(label);
-        Serial.print(": ");
-        Serial.println(formatter(updated_value));
+        tft.setTextSize(3);
+        tft.fillRect(0, 5*2*8, tft.width(), 2*8*3, HX8357_BLACK);
+        tft.setCursor(0, 5*2*8);
+        tft.print(label);
+        tft.println(":");
+        tft.print("    ");
+        tft.println(formatter(updated_value));
         return updated_value;
     }
     return current_value;
@@ -191,21 +254,23 @@ void handle_waiting() {
             // clicking does whatever the cursor is on in the menu
             // we'll handle that action on the next loop
             if (click) {
+                clear_menu(menu_manager.current_menu_);
                 menu_manager.expand();
                 draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
             }
             if (turn != 0) {
                 if(turn < 0) {
                     menu_manager.select_down();
-                    draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
+                    draw_menu(menu_manager.current_menu_, menu_manager.current_option_, false);
                 } else if(turn > 0) {
                     menu_manager.select_up();
-                    draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
+                    draw_menu(menu_manager.current_menu_, menu_manager.current_option_, false);
                 }
             }
             break;
         case MOPT_BACK:
             // need to back out of being in BACK and back out of parent menu
+            clear_menu(menu_manager.current_menu_);
             menu_manager.collapse();
             menu_back();
             break;
@@ -259,6 +324,14 @@ void setup() {
     Serial.begin(38400);
     Serial.flush();
 
+    tft.begin();
+    tft.fillScreen(HX8357_BLACK);
+    tft.setRotation(TFT_ROTATION);
+    tft.setCursor(0, 0);
+    tft.setTextColor(HX8357_WHITE);
+    tft.setTextSize(2);
+    tft.println("Initializing...");
+
     Serial.println("resetting ZEROII");
     pinMode(ZEROII_Reset_Pin, OUTPUT);
     digitalWrite(ZEROII_Reset_Pin, LOW);
@@ -267,6 +340,7 @@ void setup() {
 
     if(!analyzer.zeroii_.startZeroII()) {
         Serial.println("failed to start zeroii");
+        tft.println("Failed to start ZeroII. Aborting.");
         return;
     }
 
@@ -282,6 +356,10 @@ void setup() {
 
     Serial.println("done");
 
+    tft.println("Done.");
+
+    tft.fillScreen(HX8357_BLACK);
+    draw_title();
     draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
 }
 
