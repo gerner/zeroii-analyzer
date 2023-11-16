@@ -54,17 +54,17 @@ class Analyzer {
             cal_load_ = Complex(0);
         }
 
-        Complex calibrate_short(int32_t fq, float z0) {
+        Complex calibrate_short(uint32_t fq, float z0) {
             cal_short_ = compute_gamma(uncalibrated_measure(fq), z0);
             return cal_short_;
         }
 
-        Complex calibrate_open(int32_t fq, float z0) {
+        Complex calibrate_open(uint32_t fq, float z0) {
             cal_open_ = compute_gamma(uncalibrated_measure(fq), z0);
             return cal_open_;
         }
 
-        Complex calibrate_load(int32_t fq, float z0) {
+        Complex calibrate_load(uint32_t fq, float z0) {
             cal_load_ = compute_gamma(uncalibrated_measure(fq), z0);
             return cal_load_;
         }
@@ -75,7 +75,7 @@ class Analyzer {
             cal_load_ = cal_load;
         }
 
-        Complex uncalibrated_measure(int32_t fq) {
+        Complex uncalibrated_measure(uint32_t fq) {
             zeroii_.startMeasure(fq);
 
             return Complex(zeroii_.getR(), zeroii_.getX());

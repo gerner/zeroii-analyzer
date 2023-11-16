@@ -4,7 +4,7 @@
 
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <SPI.h>
-#include "Adafruit_HX8357.h"
+#include "Adafruit_TFTLCD.h"
 #include "TouchScreen.h"
 
 #include "analyzer.h"
@@ -26,14 +26,27 @@
 #define MINPRESSURE 10
 #define MAXPRESSURE 1000
 
-// The display uses hardware SPI, plus #9 & #10
-#define TFT_RST -1  // dont use a reset pin, tie to arduino RST if you like
-#define TFT_DC 9
-#define TFT_CS 10
+ // The control pins for the LCD can be assigned to any digital or
+// analog pins...but we'll use the analog pins as this allows us to
+// double up the pins with the touch screen (see the TFT paint example).
+#define LCD_CS A3 // Chip Select goes to Analog 3
+#define LCD_CD A2 // Command/Data goes to Analog 2
+#define LCD_WR A1 // LCD Write goes to Analog 1
+#define LCD_RD A0 // LCD Read goes to Analog 0
+#define LCD_RESET -1
 
-#define TFT_ROTATION 1
+#define TFT_ROTATION 3
+#define	BLACK   0x0000
+#define	BLUE    0x001F
+#define	RED     0xF800
+#define	GREEN   0x07E0
+#define CYAN    0x07FF
+#define MAGENTA 0xF81F
+#define YELLOW  0xFFE0
+#define WHITE   0xFFFF
 
-Adafruit_HX8357 tft = Adafruit_HX8357(TFT_CS, TFT_DC, TFT_RST);
+//Adafruit_HX8357 tft = Adafruit_HX8357(TFT_CS, TFT_DC, TFT_RST);
+Adafruit_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
 
 // Some display configs
 #define TITLE_TEXT_SIZE 2
@@ -51,11 +64,11 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 //1GHz
 #define MAX_FQ 1000000000
 
-#define ZEROII_Reset_Pin  6
 #define ZERO_I2C_ADDRESS 0x5B
-#define CLK 2
-#define DT 3
-#define SW 5
+#define CLK 12
+#define DT 11
+#define SW 10
+
 #define Z0 50
 
 Analyzer analyzer(Z0);
@@ -94,9 +107,9 @@ Menu root_menu(NULL, root_menu_options, sizeof(root_menu_options)/sizeof(root_me
 
 MenuManager menu_manager(&root_menu);
 
-int32_t startFq = 28300000;
-int32_t endFq = 28500000;
-int32_t dotsNumber = 100;
+uint32_t startFq = 28300000;
+uint32_t endFq = 28500000;
+uint16_t dotsNumber = 100;
 
 #define CAL_START 0
 #define CAL_S 1
@@ -143,7 +156,7 @@ void clear_menu(Menu* current_menu) {
         }
     }
     w = 6*MENU_TEXT_SIZE*w;
-    tft.fillRect(MENU_ORIG_X, MENU_ORIG_Y, w, h, HX8357_BLACK);
+    tft.fillRect(MENU_ORIG_X, MENU_ORIG_Y, w, h, BLACK);
 }
 
 // draws menu on the tft
@@ -152,7 +165,7 @@ void draw_menu(Menu* current_menu, int current_option, bool fresh=true) {
         clear_menu(current_menu);
     } else {
         // just blank the cursor area
-        tft.fillRect(MENU_ORIG_X, MENU_ORIG_Y, 6*MENU_TEXT_SIZE, 8*current_menu->option_count*MENU_TEXT_SIZE, HX8357_BLACK);
+        tft.fillRect(MENU_ORIG_X, MENU_ORIG_Y, 6*MENU_TEXT_SIZE, 8*current_menu->option_count*MENU_TEXT_SIZE, BLACK);
     }
     tft.setCursor(MENU_ORIG_X, MENU_ORIG_Y);
     tft.setTextSize(MENU_TEXT_SIZE);
@@ -187,7 +200,7 @@ String decimal_int_formatter(const int32_t v) {
 int32_t set_user_value(int32_t current_value, int32_t min_value, int32_t max_value, String label, int32_t multiplier=1, int_formatter formatter=&decimal_int_formatter) {
     // clicking backs out of this option
     if (click) {
-        tft.fillScreen(HX8357_BLACK);
+        tft.fillScreen(BLACK);
         draw_title();
         menu_back();
         return current_value;
@@ -199,7 +212,7 @@ int32_t set_user_value(int32_t current_value, int32_t min_value, int32_t max_val
         int32_t inc = turn * (uint32_t(1) << (uint32_t(encoder.speed()/2))) * multiplier;
         int32_t updated_value = constrain(current_value + inc, min_value, max_value);
         tft.setTextSize(3);
-        tft.fillRect(0, 5*2*8, tft.width(), 2*8*3, HX8357_BLACK);
+        tft.fillRect(0, 5*2*8, tft.width(), 2*8*3, BLACK);
         tft.setCursor(0, 5*2*8);
         tft.print(label);
         tft.println(":");
@@ -323,26 +336,30 @@ void handle_waiting() {
 void setup() {
     Serial.begin(38400);
     Serial.flush();
-
-    tft.begin();
-    tft.fillScreen(HX8357_BLACK);
-    tft.setRotation(TFT_ROTATION);
-    tft.setCursor(0, 0);
-    tft.setTextColor(HX8357_WHITE);
-    tft.setTextSize(2);
     tft.println("Initializing...");
 
-    Serial.println("resetting ZEROII");
-    pinMode(ZEROII_Reset_Pin, OUTPUT);
-    digitalWrite(ZEROII_Reset_Pin, LOW);
-    delay(50);
-    digitalWrite(ZEROII_Reset_Pin, HIGH);
+    Serial.println("starting TFT...");
+    tft.begin(tft.readID());
+    tft.fillScreen(BLACK);
+    tft.setRotation(TFT_ROTATION);
+    tft.setCursor(0, 0);
+    tft.setTextColor(WHITE);
+    tft.setTextSize(2);
+    Serial.println("TFT started.");
 
+    //Serial.println("resetting ZEROII");
+    //pinMode(ZEROII_Reset_Pin, OUTPUT);
+    //digitalWrite(ZEROII_Reset_Pin, LOW);
+    //delay(50);
+    //digitalWrite(ZEROII_Reset_Pin, HIGH);
+
+    Serial.println("starting ZEROII...");
     if(!analyzer.zeroii_.startZeroII()) {
         Serial.println("failed to start zeroii");
         tft.println("Failed to start ZeroII. Aborting.");
         return;
     }
+    Serial.println("ZEROII started.");
 
     String str = "Version: ";
     Serial.println(str + analyzer.zeroii_.getMajorVersion() + "." + analyzer.zeroii_.getMinorVersion() +
@@ -350,15 +367,16 @@ void setup() {
             ", SN: " + analyzer.zeroii_.getSerialNumber()
     );
 
+    Serial.println("Starting encoder/button...");
     encoder.setPeriod(200);
     encoder.begin();
     button.begin();
+    Serial.println("Encoder/button started.");
 
-    Serial.println("done");
 
-    tft.println("Done.");
+    Serial.println("Initialization complete.");
 
-    tft.fillScreen(HX8357_BLACK);
+    tft.fillScreen(BLACK);
     draw_title();
     draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
 }
@@ -378,7 +396,7 @@ void loop() {
     delay(1);
 }
 
-void analyze_frequency(int32_t fq) {
+void analyze_frequency(uint32_t fq) {
     Complex uncal_z = analyzer.uncalibrated_measure(fq);
     Complex cal_gamma = analyzer.calibrated_gamma(uncal_z);
     float SWR = compute_swr(cal_gamma);
@@ -396,11 +414,11 @@ void analyze_frequency(int32_t fq) {
     Serial.print("\r\n");
 }
 
-void analyze(int32_t startFq, int32_t endFq) {
+void analyze(uint32_t startFq, uint32_t endFq) {
 
-    int32_t stepFq = (endFq - startFq)/dotsNumber;
+    uint32_t stepFq = (endFq - startFq)/dotsNumber;
 
-    for(int i = 0; i <= dotsNumber; ++i)
+    for(uint16_t i = 0; i <= dotsNumber; ++i)
     {
         analyze_frequency(startFq + (stepFq*i));
     }
