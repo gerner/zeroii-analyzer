@@ -94,4 +94,11 @@ class Analyzer {
         Complex cal_load_;
 };
 
+struct AnalysisPoint {
+    uint32_t fq;
+    Complex uncal_gamma;
+
+    AnalysisPoint(uint32_t a_fq, Complex a_uncal_gamma) : fq(a_fq), uncal_gamma(a_uncal_gamma) {}
+};
+
 #endif

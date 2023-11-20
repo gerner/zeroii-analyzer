@@ -73,6 +73,10 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 #define Z0 50
 
 Analyzer analyzer(Z0);
+// holds the most recent set of analysis results, initialize to zero length
+// array so we can realloc it below
+size_t analysis_results_len = 0;
+AnalysisPoint* analysis_results = (AnalysisPoint*)malloc(sizeof(AnalysisPoint)*analysis_results_len);
 MD_REncoder encoder(CLK, DT);
 Button button(SW);
 
@@ -461,7 +465,10 @@ void handle_option() {
             break;
         case MOPT_ANALYZE:
             Serial.println("Analyzing...");
-            analyze(startFq, endFq);
+            free(analysis_results);
+            analysis_results_len = dotsNumber;
+            analysis_results = (AnalysisPoint*)realloc(analysis_results, sizeof(AnalysisPoint)*analysis_results_len);
+            analyze(startFq, endFq, dotsNumber, analysis_results);
             menu_back();
             break;
         case MOPT_FQCENTER:
@@ -576,15 +583,14 @@ void analyze_frequency(uint32_t fq) {
     Serial.print("\r\n");
 }
 
-void analyze(uint32_t startFq, uint32_t endFq) {
-
+void analyze(uint32_t startFq, uint32_t endFq, uint16_t dotsNumber, AnalysisPoint* results) {
+    uint32_t fq = startFq;
     uint32_t stepFq = (endFq - startFq)/dotsNumber;
 
-    for(uint16_t i = 0; i <= dotsNumber; ++i)
+    for(uint16_t i = 0; i <= dotsNumber; ++i, fq+=stepFq)
     {
-        analyze_frequency(startFq + (stepFq*i));
+        results[i] = AnalysisPoint(fq, analyzer.uncalibrated_measure(fq));
     }
-    Serial.print("------------------------\r\n");
 }
 
 /*
