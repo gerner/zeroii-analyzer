@@ -64,6 +64,7 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 //1GHz
 #define MAX_FQ 1000000000
 
+#define ZERO_II_RST 13
 #define ZERO_I2C_ADDRESS 0x5B
 #define CLK 12
 #define DT 11
@@ -87,6 +88,7 @@ bool click = false;
 #define MOPT_FQEND 7
 #define MOPT_FQSTEPS 8
 #define MOPT_BACK 9
+#define MOPT_DEEP 10
 
 MenuOption fq_menu_options[] = {
     MenuOption("Fq Start", MOPT_FQSTART, NULL),
@@ -117,26 +119,6 @@ uint16_t dotsNumber = 100;
 #define CAL_L 3
 #define CAL_END 4
 uint8_t calibration_state = CAL_START;
-
-/*void draw_menu(Menu* current_menu, int current_option) {
-    for(int i=0; i<current_menu->option_count; i++) {
-        // either:
-        // this is the current option
-        // this is the selected option
-        // this is just an option
-        if (current_option >= 0 && current_menu->options[i].option_id == current_option) {
-            Serial.print(" +");
-        } else if(current_menu->selected_option == i) {
-            Serial.print(" >");
-        } else {
-            Serial.print("  ");
-        }
-        Serial.print("[");
-        Serial.print(current_menu->options[i].label);
-        Serial.print("]");
-    }
-    Serial.println();
-}*/
 
 void draw_title() {
     tft.setCursor(0,0);
@@ -261,7 +243,139 @@ String frequency_formatter(const int32_t fq) {
     }
 }
 
-void handle_waiting() {
+String frequency_parts_formatter(const uint32_t fq) {
+    uint16_t ghz_part, mhz_part, khz_part, hz_part;
+    char buf[1+3*4+3+1];
+    ghz_part = fq / 1000 / 1000 / 1000;
+    mhz_part = fq / 1000 / 1000 % 1000ul;
+    khz_part = fq / 1000 % 1000ul;
+    hz_part  = fq % 1000ul;
+
+    snprintf(buf, sizeof(buf), "%d.%03d.%03d.%03d Hz", ghz_part, mhz_part, khz_part, hz_part);
+    return String(buf);
+}
+
+enum FQ_SETTING_STATE { FQ_SETTING_START, FQ_SETTING_GHZ, FQ_SETTING_MHZ, FQ_SETTING_KHZ, FQ_SETTING_HZ, FQ_SETTING_END };
+
+class FqSetter {
+    public:
+        void initialize(const uint32_t fq) {
+            fq_state_ = FQ_SETTING_START;
+            fq_ = fq;
+        }
+
+        String frequency_parts_indicator() const {
+            switch(fq_state_) {
+                case FQ_SETTING_GHZ: return String("    ^");
+                case FQ_SETTING_MHZ: return String("      ^^^");
+                case FQ_SETTING_KHZ: return String("          ^^^");
+                case FQ_SETTING_HZ:  return String("              ^^^");
+            }
+        }
+
+        void draw_fq_setting(const String label) const {
+            tft.setTextSize(3);
+            tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
+            tft.setCursor(0, 6*2*8);
+            tft.print("    ");
+            tft.println(frequency_parts_formatter(fq_));
+            tft.println(frequency_parts_indicator());
+        }
+
+        uint32_t set_fq_value(const uint32_t min_fq, const uint32_t max_fq, const String label) {
+            // clicking advances through fields in the fq (GHz, MHz, ...) or sets the value
+            if (click) {
+                if (fq_state_ == FQ_SETTING_HZ) {
+                    tft.fillScreen(BLACK);
+                    draw_title();
+                    menu_back();
+                    fq_state_ = FQ_SETTING_END;
+                    return fq_;
+                } else {
+                    fq_state_++;
+                    draw_fq_setting(label);
+                    return fq_;
+                }
+            } else if (fq_state_ == FQ_SETTING_START) {
+                fq_state_ = FQ_SETTING_GHZ;
+                tft.fillRect(0, 5*2*8, tft.width(), 3*8*3, BLACK);
+                tft.setCursor(0, 5*2*8);
+                tft.print(label);
+                tft.println(":");
+                draw_fq_setting(label);
+                return fq_;
+            } else if (turn != 0) {
+                // rotating changes value
+                int32_t inc = 1ul;
+                switch(fq_state_) {
+                    case FQ_SETTING_GHZ: inc = 1ul * 1000 * 1000 * 1000; break;
+                    case FQ_SETTING_MHZ: inc = 1ul * 1000 * 1000; break;
+                    case FQ_SETTING_KHZ: inc = 1ul * 1000; break;
+                }
+                if (fq_state_ != FQ_SETTING_GHZ) {
+                    // inc scales with how fast you're turning it
+                    // inc is direction * 2 ^ speed / 10
+                    inc = (uint32_t(1) << (uint32_t(encoder.speed()/2))) * inc;
+                } // else just inc by 1GHz to avoid overflow
+                fq_ = constrain(fq_ + turn * inc, min_fq, max_fq);
+                draw_fq_setting(label);
+                return fq_;
+            } else {
+                return fq_;
+            }
+        }
+
+        uint32_t fq() const { return fq_; }
+    private:
+        uint8_t fq_state_;
+        uint32_t fq_;
+};
+
+FqSetter fq_setter;
+
+void enter_option(int32_t option_id) {
+    switch(option_id) {
+        case MOPT_FQCENTER: {
+            int32_t centerFq = startFq + (endFq-startFq)/2;
+            fq_setter.initialize(centerFq);
+            break;
+        }
+        case MOPT_FQWINDOW: {
+            int32_t rangeFq = endFq - startFq;
+            fq_setter.initialize(rangeFq);
+            break;
+        }
+        case MOPT_FQSTART: fq_setter.initialize(startFq); break;
+        case MOPT_FQEND: fq_setter.initialize(endFq); break;
+    }
+}
+
+void leave_option(int32_t option_id) {
+    switch(option_id) {
+        case MOPT_FQCENTER:
+            // move [startFq, endFq] so it's centered on desired value
+            startFq = constrain(fq_setter.fq() - (endFq - startFq)/2, MIN_FQ, MAX_FQ);
+            endFq = constrain(fq_setter.fq() + (endFq - startFq)/2, MIN_FQ, MAX_FQ);
+            break;
+        case MOPT_FQWINDOW: {
+            // narrow/expand [startFq, endFq] remaining centered
+            int32_t cntFq = startFq + (endFq - startFq)/2;
+            startFq = constrain(cntFq - fq_setter.fq()/2, MIN_FQ, MAX_FQ);
+            endFq = constrain(cntFq + fq_setter.fq()/2, MIN_FQ, MAX_FQ);
+            break;
+        }
+        case MOPT_FQSTART:
+            startFq = fq_setter.fq();
+            endFq = constrain(endFq, startFq+1, MAX_FQ);
+            break;
+        case MOPT_FQEND:
+            endFq = fq_setter.fq();
+            startFq = constrain(startFq, MIN_FQ, endFq-1);
+            break;
+    }
+}
+
+void handle_option() {
     switch(menu_manager.current_option_) {
         case -1:
             // clicking does whatever the cursor is on in the menu
@@ -269,6 +383,7 @@ void handle_waiting() {
             if (click) {
                 clear_menu(menu_manager.current_menu_);
                 menu_manager.expand();
+                enter_option(menu_manager.current_option_);
                 draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
             }
             if (turn != 0) {
@@ -284,6 +399,7 @@ void handle_waiting() {
         case MOPT_BACK:
             // need to back out of being in BACK and back out of parent menu
             clear_menu(menu_manager.current_menu_);
+            leave_option(menu_manager.current_option_);
             menu_manager.collapse();
             menu_back();
             break;
@@ -292,30 +408,17 @@ void handle_waiting() {
             analyze(startFq, endFq);
             menu_back();
             break;
-        case MOPT_FQCENTER: {
-            // move [startFq, endFq] so it's centered on desired value
-            int32_t centerFq = startFq + (endFq-startFq)/2;
-            centerFq = set_user_value(centerFq, MIN_FQ, MAX_FQ, "Center Frequency", frequency_step(centerFq), &frequency_formatter);
-            startFq = constrain(centerFq - (endFq - startFq)/2, MIN_FQ, MAX_FQ);
-            endFq = constrain(centerFq + (endFq - startFq)/2, MIN_FQ, MAX_FQ);
+        case MOPT_FQCENTER:
+            fq_setter.set_fq_value(MIN_FQ, MAX_FQ, "Center Frequency");
             break;
-        }
-        case MOPT_FQWINDOW: {
-            // narrow/expand [startFq, endFq] remaining centered
-            int32_t rangeFq = endFq - startFq;
-            rangeFq = set_user_value(rangeFq, 0, MAX_FQ/2, "Frequency Range", frequency_step(rangeFq), &frequency_formatter);
-            int32_t cntFq = startFq + (endFq - startFq)/2;
-            startFq = constrain(cntFq - rangeFq/2, MIN_FQ, MAX_FQ);
-            endFq = constrain(cntFq + rangeFq/2, MIN_FQ, MAX_FQ);
+        case MOPT_FQWINDOW:
+            fq_setter.set_fq_value(0, MAX_FQ/2, "Frequency Range");
             break;
-        }
         case MOPT_FQSTART:
-            startFq = set_user_value(startFq, MIN_FQ, MAX_FQ, "Start Frequency", frequency_step(startFq), &frequency_formatter);
-            endFq = constrain(endFq, startFq+frequency_step(startFq), MAX_FQ);
+            fq_setter.set_fq_value(MIN_FQ, MAX_FQ, "Start Frequency");
             break;
         case MOPT_FQEND:
-            endFq = set_user_value(endFq, MIN_FQ, MAX_FQ, "End Frequency", frequency_step(endFq), &frequency_formatter);
-            startFq = constrain(startFq, MIN_FQ, endFq-frequency_step(endFq));
+            fq_setter.set_fq_value(MIN_FQ, MAX_FQ, "End Frequency");
             break;
         case MOPT_FQSTEPS:
             dotsNumber = set_user_value(dotsNumber, 1, 128, "Steps");
@@ -354,9 +457,14 @@ void setup() {
     //digitalWrite(ZEROII_Reset_Pin, HIGH);
 
     Serial.println("starting ZEROII...");
+    pinMode(ZERO_II_RST, OUTPUT);
+    digitalWrite(ZERO_II_RST, LOW);
+    delay(50);
+    digitalWrite(ZERO_II_RST, HIGH);
     if(!analyzer.zeroii_.startZeroII()) {
         Serial.println("failed to start zeroii");
         tft.println("Failed to start ZeroII. Aborting.");
+        abort();
         return;
     }
     Serial.println("ZEROII started.");
@@ -391,9 +499,8 @@ void loop() {
         turn = 0;
     }
     click = button.read();
-    handle_waiting();
+    handle_option();
     // TODO: if we're in a measurement, allow cancelling it by clicking
-    delay(1);
 }
 
 void analyze_frequency(uint32_t fq) {

@@ -6,13 +6,13 @@
 struct Menu;
 
 struct MenuOption {
-    MenuOption(String l, int oid, Menu* sm) {
+    MenuOption(String l, uint16_t oid, Menu* sm) {
         label = l;
         option_id = oid;
         sub_menu = sm;
     }
     String label;
-    int option_id;
+    uint16_t option_id;
     Menu* sub_menu;
 };
 
@@ -69,6 +69,7 @@ class MenuManager {
                 current_option_ = current_option->option_id;
             } else {
                 current_menu_ = current_option->sub_menu;
+                assert(current_option_ == -1);
             }
         }
 
@@ -87,7 +88,7 @@ class MenuManager {
 
         Menu* root_menu_;
         Menu* current_menu_;
-        int current_option_;
+        int32_t current_option_;
 
     private:
 };
