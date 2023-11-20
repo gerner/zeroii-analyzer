@@ -113,12 +113,67 @@ uint32_t startFq = 28300000;
 uint32_t endFq = 28500000;
 uint16_t dotsNumber = 100;
 
-#define CAL_START 0
-#define CAL_S 1
-#define CAL_O 2
-#define CAL_L 3
-#define CAL_END 4
-uint8_t calibration_state = CAL_START;
+enum CAL_STEP { CAL_START, CAL_S, CAL_O, CAL_L, CAL_END };
+
+class Calibrator {
+    public:
+    Calibrator(Analyzer* analyzer) {
+        analyzer_ = analyzer;
+    }
+    void initialize(uint32_t target_fq) {
+        calibration_state_ = CAL_START;
+        target_fq_ = target_fq;
+    }
+    uint8_t calibration_step() {
+        switch(calibration_state_) {
+            case CAL_START:
+                tft.setTextSize(3);
+                tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
+                tft.setCursor(0, 7*2*8);
+                tft.println("connect short and press knob");
+                calibration_state_ = CAL_S;
+                break;
+            case CAL_S:
+                if (click) {
+                    tft.setTextSize(3);
+                    tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
+                    tft.setCursor(0, 6*2*8);
+                    tft.println(analyzer_->calibrate_short(target_fq_, Z0));
+                    tft.println("connect open and press knob");
+                    calibration_state_ = CAL_O;
+                }
+                break;
+            case CAL_O:
+                if (click) {
+                    tft.setTextSize(3);
+                    tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
+                    tft.setCursor(0, 6*2*8);
+                    tft.println(analyzer_->calibrate_open(target_fq_, Z0));
+                    tft.println("connect load and press knob");
+                    calibration_state_ = CAL_L;
+                }
+                break;
+            case CAL_L:
+                if (click) {
+                    tft.setTextSize(3);
+                    tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
+                    tft.setCursor(0, 6*2*8);
+                    tft.println(analyzer_->calibrate_load(target_fq_, Z0));
+                    tft.println("done calibrating.");
+                    calibration_state_ = CAL_END;
+                }
+                break;
+        }
+        return calibration_state_;
+    }
+
+    private:
+    Analyzer* analyzer_;
+    uint8_t calibration_state_;
+    uint32_t target_fq_;
+};
+
+Calibrator calibrator(&analyzer);
 
 void draw_title() {
     tft.setCursor(0,0);
@@ -347,6 +402,7 @@ void enter_option(int32_t option_id) {
         }
         case MOPT_FQSTART: fq_setter.initialize(startFq); break;
         case MOPT_FQEND: fq_setter.initialize(endFq); break;
+        case MOPT_CALIBRATE: calibrator.initialize((endFq-startFq)/2); break;
     }
 }
 
@@ -423,18 +479,17 @@ void handle_option() {
         case MOPT_FQSTEPS:
             dotsNumber = set_user_value(dotsNumber, 1, 128, "Steps");
             break;
-        case MOPT_CALIBRATE:
-            calibration_state = calibration_step(calibration_state);
+        case MOPT_CALIBRATE: {
+            uint8_t calibration_state = calibrator.calibration_step();
             if (calibration_state == CAL_END) {
                 menu_back();
-                calibration_state = CAL_START;
             }
             break;
+        }
         default:
             break;
     }
 }
-
 
 void setup() {
     Serial.begin(38400);
@@ -530,37 +585,6 @@ void analyze(uint32_t startFq, uint32_t endFq) {
         analyze_frequency(startFq + (stepFq*i));
     }
     Serial.print("------------------------\r\n");
-}
-
-uint8_t calibration_step(uint8_t calibration_state) {
-    switch(calibration_state) {
-        case CAL_START:
-            Serial.println("connect short and press knob");
-            return CAL_S;
-            break;
-        case CAL_S:
-            if (click) {
-                Serial.println(analyzer.calibrate_short((endFq-startFq)/2, Z0));
-                Serial.println("connect open and press knob");
-                return CAL_O;
-            }
-            break;
-        case CAL_O:
-            if (click) {
-                Serial.println(analyzer.calibrate_open((endFq-startFq)/2, Z0));
-                Serial.println("connect load and press knob");
-                return CAL_L;
-            }
-            break;
-        case CAL_L:
-            if (click) {
-                Serial.println(analyzer.calibrate_load((endFq-startFq)/2, Z0));
-                Serial.println("done calibrating.");
-                return CAL_END;
-            }
-            break;
-    }
-    return calibration_state;
 }
 
 /*
