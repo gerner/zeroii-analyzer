@@ -76,6 +76,7 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 Analyzer analyzer(Z0);
 // holds the most recent set of analysis results, initialize to zero length
 // array so we can realloc it below
+size_t swr_i = 0;
 size_t analysis_results_len = 0;
 AnalysisPoint analysis_results[MAX_STEPS];
 MD_REncoder encoder(CLK, DT);
@@ -410,7 +411,12 @@ void enter_option(int32_t option_id) {
         case MOPT_FQSTART: fq_setter.initialize(startFq); break;
         case MOPT_FQEND: fq_setter.initialize(endFq); break;
         case MOPT_CALIBRATE: calibrator.initialize((endFq-startFq)/2); break;
-        case MOPT_SWR: graph_swr(analysis_results, analysis_results_len); break;
+        case MOPT_SWR:
+            swr_i = 0;
+            graph_swr(analysis_results, analysis_results_len);
+            draw_swr_pointer(analysis_results, analysis_results_len, swr_i, swr_i);
+            draw_swr_title(analysis_results, analysis_results_len, swr_i);
+            break;
     }
 }
 
@@ -492,6 +498,14 @@ void handle_option() {
         case MOPT_SWR:
             if (click) {
                 menu_back();
+            } else if (turn != 0) {
+                // move the "pointer" on the swr graph
+                size_t old_swr_i = swr_i;
+
+                int32_t inc = (uint32_t(1) << (uint32_t(encoder.speed()/2)));
+                swr_i = constrain(swr_i+turn*inc, 0, analysis_results_len);
+                draw_swr_pointer(analysis_results, analysis_results_len, swr_i, old_swr_i);
+                draw_swr_title(analysis_results, analysis_results_len, swr_i);
             }
             break;
         case MOPT_FQCENTER:
@@ -654,7 +668,7 @@ void graph_swr(AnalysisPoint* results, size_t results_len) {
     // x ranges from start fq to end fq
     // y ranges from 1 to 5
     int16_t x_screen = 8*2;
-    int16_t y_screen = 8*TITLE_TEXT_SIZE;
+    int16_t y_screen = 8*TITLE_TEXT_SIZE*2;
     int16_t width = tft.width()-x_screen;
     int16_t height = tft.height()-y_screen-8*2;
     tft.drawFastHLine(x_screen, y_screen+height, width, WHITE);
@@ -675,14 +689,63 @@ void graph_swr(AnalysisPoint* results, size_t results_len) {
         tft.fillCircle(xy[0], xy[1], 3, YELLOW);
     } else {
         for (size_t i=0; i<results_len-1; i++) {
+            float swr = compute_swr(analyzer.calibrated_gamma(results[i].uncal_gamma));
             int xy_start[2];
-            translate_to_screen(results[i].fq, compute_swr(analyzer.calibrated_gamma(results[i].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_start);
+            translate_to_screen(results[i].fq, swr, startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_start);
             int xy_end[2];
             translate_to_screen(results[i+1].fq, compute_swr(analyzer.calibrated_gamma(results[i+1].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_end);
             Serial.println(String("drawing line ")+xy_start[0]+","+xy_start[1]+" to "+xy_end[0]+","+xy_end[1]);
             tft.drawLine(xy_start[0], xy_start[1], xy_end[0], xy_end[1], YELLOW);
         }
     }
+}
+
+void draw_swr_pointer(AnalysisPoint* results, size_t analysis_results_len, size_t swr_i, size_t old_swr_i) {
+    // x ranges from start fq to end fq
+    // y ranges from 1 to 5
+    int16_t x_screen = 8*2;
+    int16_t y_screen = 8*TITLE_TEXT_SIZE*2;
+    int16_t width = tft.width()-x_screen;
+    int16_t height = tft.height()-y_screen-8*2;
+
+    if (analysis_results_len == 0) {
+        return;
+    }
+    int16_t pointer_width = 8;
+    int16_t pointer_height = 8;
+
+    //first clear the old swr pointer
+    int xy_pointer[2];
+    translate_to_screen(results[old_swr_i].fq, compute_swr(analyzer.calibrated_gamma(results[old_swr_i].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_pointer);
+    tft.fillTriangle(xy_pointer[0], xy_pointer[1], xy_pointer[0]-pointer_width/2, xy_pointer[1]+pointer_height, xy_pointer[0]+pointer_width/2, xy_pointer[1]+pointer_height, BLACK);
+
+    //draw the "pointer"
+    translate_to_screen(results[swr_i].fq, compute_swr(analyzer.calibrated_gamma(results[swr_i].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_pointer);
+    tft.drawTriangle(xy_pointer[0], xy_pointer[1], xy_pointer[0]-pointer_width/2, xy_pointer[1]+pointer_height, xy_pointer[0]+pointer_width/2, xy_pointer[1]+pointer_height, GREEN);
+}
+
+void draw_swr_title(AnalysisPoint* results, size_t results_len, size_t swr_i) {
+    if (analysis_results_len == 0) {
+        tft.println("No SWR results");
+        return;
+    }
+
+    size_t min_swr_i = 0;
+    float min_swr = compute_swr(analyzer.calibrated_gamma(results[results_len-1].uncal_gamma));
+    for (size_t i=0; i<results_len; i++) {
+        float swr = compute_swr(analyzer.calibrated_gamma(results[i].uncal_gamma));
+        if (swr < min_swr) {
+            min_swr = swr;
+            min_swr_i = i;
+        }
+    }
+    //draw the title
+    tft.fillRect(0, 0, tft.width(), 8*TITLE_TEXT_SIZE*2, BLACK);
+    tft.setCursor(0,0);
+    tft.setTextSize(TITLE_TEXT_SIZE);
+
+    tft.println(String("Min SWR: ")+compute_swr(analyzer.calibrated_gamma(results[min_swr_i].uncal_gamma))+" "+frequency_formatter(results[min_swr_i].fq));
+    tft.println(String("Sel SWR: ")+compute_swr(analyzer.calibrated_gamma(results[swr_i].uncal_gamma))+" "+frequency_formatter(results[swr_i].fq));
 }
 
 /*
