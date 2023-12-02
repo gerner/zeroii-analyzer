@@ -59,6 +59,15 @@ class MenuManager {
             select(current_menu_->selected_option-1);
         }
 
+        void select_option(uint16_t option_id) {
+            for(size_t i; i<current_menu_->option_count; i++) {
+                if(current_menu_->options[i].option_id == option_id) {
+                    select(i);
+                    return;
+                }
+            }
+        }
+
         void expand() {
             assert(current_menu_->selected_option < current_menu_->option_count);
             MenuOption* current_option = &(current_menu_->options[current_menu_->selected_option]);

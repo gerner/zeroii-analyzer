@@ -63,6 +63,7 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 #define MIN_FQ 100000
 //1GHz
 #define MAX_FQ 1000000000
+#define MAX_STEPS 128
 
 #define ZERO_II_RST 13
 #define ZERO_I2C_ADDRESS 0x5B
@@ -76,7 +77,7 @@ Analyzer analyzer(Z0);
 // holds the most recent set of analysis results, initialize to zero length
 // array so we can realloc it below
 size_t analysis_results_len = 0;
-AnalysisPoint* analysis_results = (AnalysisPoint*)malloc(sizeof(AnalysisPoint)*analysis_results_len);
+AnalysisPoint analysis_results[MAX_STEPS];
 MD_REncoder encoder(CLK, DT);
 Button button(SW);
 
@@ -92,6 +93,7 @@ bool click = false;
 #define MOPT_FQEND 7
 #define MOPT_FQSTEPS 8
 #define MOPT_BACK 9
+#define MOPT_SWR 10
 
 MenuOption fq_menu_options[] = {
     MenuOption("Fq Start", MOPT_FQSTART, NULL),
@@ -107,6 +109,7 @@ MenuOption root_menu_options[] = {
     MenuOption("Analyze", MOPT_ANALYZE, NULL),
     MenuOption("Fq Options", MOPT_FQ, &fq_menu),
     MenuOption("Calibration", MOPT_CALIBRATE, NULL),
+    MenuOption("SWR graph", MOPT_SWR, NULL),
 };
 Menu root_menu(NULL, root_menu_options, sizeof(root_menu_options)/sizeof(root_menu_options[0]));
 
@@ -179,6 +182,7 @@ class Calibrator {
 Calibrator calibrator(&analyzer);
 
 void draw_title() {
+    tft.fillRect(0, 0, tft.width(), 8*TITLE_TEXT_SIZE, BLACK);
     tft.setCursor(0,0);
     tft.setTextSize(TITLE_TEXT_SIZE);
 
@@ -406,6 +410,7 @@ void enter_option(int32_t option_id) {
         case MOPT_FQSTART: fq_setter.initialize(startFq); break;
         case MOPT_FQEND: fq_setter.initialize(endFq); break;
         case MOPT_CALIBRATE: calibrator.initialize((endFq-startFq)/2); break;
+        case MOPT_SWR: graph_swr(analysis_results, analysis_results_len); break;
     }
 }
 
@@ -439,7 +444,18 @@ void leave_option(int32_t option_id) {
             startFq = constrain(startFq, MIN_FQ, endFq-1);
             draw_title();
             break;
+        case MOPT_SWR:
+            tft.fillScreen(BLACK);
+            draw_title();
+            break;
     }
+}
+
+void choose_option() {
+    clear_menu(menu_manager.current_menu_);
+    menu_manager.expand();
+    draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
+    enter_option(menu_manager.current_option_);
 }
 
 void handle_option() {
@@ -448,12 +464,8 @@ void handle_option() {
             // clicking does whatever the cursor is on in the menu
             // we'll handle that action on the next loop
             if (click) {
-                clear_menu(menu_manager.current_menu_);
-                menu_manager.expand();
-                enter_option(menu_manager.current_option_);
-                draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
-            }
-            if (turn != 0) {
+                choose_option();
+            } else if (turn != 0) {
                 if(turn < 0) {
                     menu_manager.select_down();
                     draw_menu(menu_manager.current_menu_, menu_manager.current_option_, false);
@@ -471,11 +483,16 @@ void handle_option() {
             break;
         case MOPT_ANALYZE:
             Serial.println("Analyzing...");
-            free(analysis_results);
             analysis_results_len = dotsNumber;
-            analysis_results = (AnalysisPoint*)realloc(analysis_results, sizeof(AnalysisPoint)*analysis_results_len);
             analyze(startFq, endFq, dotsNumber, analysis_results);
             menu_back();
+            menu_manager.select_option(MOPT_SWR);
+            choose_option();
+            break;
+        case MOPT_SWR:
+            if (click) {
+                menu_back();
+            }
             break;
         case MOPT_FQCENTER:
             fq_setter.set_fq_value(MIN_FQ, MAX_FQ, "Center Frequency");
@@ -603,9 +620,68 @@ void analyze(uint32_t startFq, uint32_t endFq, uint16_t dotsNumber, AnalysisPoin
     uint32_t fq = startFq;
     uint32_t stepFq = (endFq - startFq)/dotsNumber;
 
-    for(uint16_t i = 0; i <= dotsNumber; ++i, fq+=stepFq)
+    Serial.println(String("analyzing startFq ")+startFq+" endFq "+endFq+" dotsNumber "+dotsNumber);
+
+    for(size_t i = 0; i <= dotsNumber; ++i, fq+=stepFq)
     {
-        results[i] = AnalysisPoint(fq, analyzer.uncalibrated_measure(fq));
+        Serial.println(String("analyzing fq ")+fq);
+        Complex res = analyzer.uncalibrated_measure(fq);
+        Serial.println("putting into results array");
+        Serial.flush();
+        results[i] = AnalysisPoint(fq, res);
+    }
+    Serial.println("analysis complete");
+}
+
+void translate_to_screen(float x_in, float y_in, float x_min, float x_max, float y_min, float y_max, int16_t x_screen, int16_t y_screen, int16_t width, int16_t height, int* xy) {
+    float x_range = x_max - x_min;
+    float y_range = y_max - y_min;
+    xy[0] = (x_in - x_min) / x_range * width + x_screen;
+    xy[1] = (y_in - y_min) / y_range * height + y_screen;
+
+    Serial.println(String(x_in)+" -> "+xy[0]+" "+y_in+" -> "+xy[1]);
+    Serial.flush();
+}
+
+void graph_swr(AnalysisPoint* results, size_t results_len) {
+    Serial.println(String("graphing swr plot with ")+results_len+" points");
+    Serial.flush();
+    // area is just below the title
+    tft.fillRect(0, 5*2*8, tft.width(), 3*8*3, BLACK);
+    tft.fillRect(0, 8*TITLE_TEXT_SIZE, tft.width(), tft.height()-8*TITLE_TEXT_SIZE, BLACK);
+
+    // draw axes
+    // x ranges from start fq to end fq
+    // y ranges from 1 to 5
+    int16_t x_screen = 8*2;
+    int16_t y_screen = 8*TITLE_TEXT_SIZE;
+    int16_t width = tft.width()-x_screen;
+    int16_t height = tft.height()-y_screen-8*2;
+    tft.drawFastHLine(x_screen, y_screen+height, width, WHITE);
+    tft.drawFastVLine(x_screen, y_screen, height, WHITE);
+
+    int xy_cutoff[2];
+    translate_to_screen(0, 3, startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_cutoff);
+    tft.drawFastHLine(x_screen, xy_cutoff[1], width, RED);
+    translate_to_screen(0, 1.5, startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_cutoff);
+    tft.drawFastHLine(x_screen, xy_cutoff[1], width, MAGENTA);
+    // draw all the analysis points
+    if (results_len == 0) {
+        Serial.println("no results to plot");
+        return;
+    } else if (results_len == 1) {
+        int xy[2];
+        translate_to_screen(results[0].fq, compute_swr(analyzer.calibrated_gamma(results[0].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy);
+        tft.fillCircle(xy[0], xy[1], 3, YELLOW);
+    } else {
+        for (size_t i=0; i<results_len-1; i++) {
+            int xy_start[2];
+            translate_to_screen(results[i].fq, compute_swr(analyzer.calibrated_gamma(results[i].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_start);
+            int xy_end[2];
+            translate_to_screen(results[i+1].fq, compute_swr(analyzer.calibrated_gamma(results[i+1].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_end);
+            Serial.println(String("drawing line ")+xy_start[0]+","+xy_start[1]+" to "+xy_end[0]+","+xy_end[1]);
+            tft.drawLine(xy_start[0], xy_start[1], xy_end[0], xy_end[1], YELLOW);
+        }
     }
 }
 

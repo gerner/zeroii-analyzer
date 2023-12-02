@@ -76,7 +76,10 @@ class Analyzer {
         }
 
         Complex uncalibrated_measure(uint32_t fq) {
+            Serial.println("starting to measure");
             zeroii_.startMeasure(fq);
+            Serial.println("start returned");
+            Serial.flush();
 
             return Complex(zeroii_.getR(), zeroii_.getX());
         }
@@ -98,6 +101,7 @@ struct AnalysisPoint {
     uint32_t fq;
     Complex uncal_gamma;
 
+    AnalysisPoint(): fq(0) {}
     AnalysisPoint(uint32_t a_fq, Complex a_uncal_gamma) : fq(a_fq), uncal_gamma(a_uncal_gamma) {}
 };
 
