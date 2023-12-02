@@ -92,7 +92,6 @@ bool click = false;
 #define MOPT_FQEND 7
 #define MOPT_FQSTEPS 8
 #define MOPT_BACK 9
-#define MOPT_DEEP 10
 
 MenuOption fq_menu_options[] = {
     MenuOption("Fq Start", MOPT_FQSTART, NULL),
@@ -228,6 +227,7 @@ void draw_menu(Menu* current_menu, int current_option, bool fresh=true) {
 
 
 void menu_back() {
+    leave_option(menu_manager.current_option_);
     clear_menu(menu_manager.current_menu_);
     menu_manager.collapse();
     draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
@@ -242,7 +242,6 @@ int32_t set_user_value(int32_t current_value, int32_t min_value, int32_t max_val
     // clicking backs out of this option
     if (click) {
         tft.fillScreen(BLACK);
-        draw_title();
         menu_back();
         return current_value;
     }
@@ -413,24 +412,32 @@ void enter_option(int32_t option_id) {
 void leave_option(int32_t option_id) {
     switch(option_id) {
         case MOPT_FQCENTER:
+            Serial.println(String("setting center fq to: ") + fq_setter.fq());
             // move [startFq, endFq] so it's centered on desired value
             startFq = constrain(fq_setter.fq() - (endFq - startFq)/2, MIN_FQ, MAX_FQ);
             endFq = constrain(fq_setter.fq() + (endFq - startFq)/2, MIN_FQ, MAX_FQ);
+            draw_title();
             break;
         case MOPT_FQWINDOW: {
+            Serial.println(String("setting window fq to: ") + fq_setter.fq());
             // narrow/expand [startFq, endFq] remaining centered
             int32_t cntFq = startFq + (endFq - startFq)/2;
             startFq = constrain(cntFq - fq_setter.fq()/2, MIN_FQ, MAX_FQ);
             endFq = constrain(cntFq + fq_setter.fq()/2, MIN_FQ, MAX_FQ);
+            draw_title();
             break;
         }
         case MOPT_FQSTART:
+            Serial.println(String("setting start fq to: ") + fq_setter.fq());
             startFq = fq_setter.fq();
             endFq = constrain(endFq, startFq+1, MAX_FQ);
+            draw_title();
             break;
         case MOPT_FQEND:
+            Serial.println(String("setting end fq to: ") + fq_setter.fq());
             endFq = fq_setter.fq();
             startFq = constrain(startFq, MIN_FQ, endFq-1);
+            draw_title();
             break;
     }
 }
@@ -459,7 +466,6 @@ void handle_option() {
         case MOPT_BACK:
             // need to back out of being in BACK and back out of parent menu
             clear_menu(menu_manager.current_menu_);
-            leave_option(menu_manager.current_option_);
             menu_manager.collapse();
             menu_back();
             break;
@@ -498,10 +504,20 @@ void handle_option() {
     }
 }
 
+void setup_failed() {
+    int led_state = 0;
+    while(1) {
+        digitalWrite(LED_BUILTIN, led_state);
+        delay(1000);
+        led_state = !led_state;
+    }
+}
+
 void setup() {
     Serial.begin(38400);
     Serial.flush();
     tft.println("Initializing...");
+    digitalWrite(LED_BUILTIN, 0);
 
     Serial.println("starting TFT...");
     tft.begin(tft.readID());
@@ -526,7 +542,7 @@ void setup() {
     if(!analyzer.zeroii_.startZeroII()) {
         Serial.println("failed to start zeroii");
         tft.println("Failed to start ZeroII. Aborting.");
-        abort();
+        setup_failed();
         return;
     }
     Serial.println("ZEROII started.");

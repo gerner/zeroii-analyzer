@@ -21,3 +21,4 @@ I ended up using I2C and not flashing the firmware (contrary to the
 
 * `RigExpertZeroII_I2C` my version of it
 * `MD_REncoder`
+* `TFTLCD-Library` my version of it
