@@ -148,8 +148,6 @@ void graph_smith(const AnalysisPoint* results, size_t results_len, const Analyze
     tft.fillRect(0, 8*TITLE_TEXT_SIZE, tft.width(), tft.height()-8*TITLE_TEXT_SIZE, BLACK);
 
     // draw axes
-    // x ranges from start fq to end fq
-    // y ranges from 1 to 5
     int16_t x_screen = 8*2;
     int16_t y_screen = 8*TITLE_TEXT_SIZE*2;
     int16_t width = tft.width()-x_screen;
@@ -167,7 +165,6 @@ void graph_smith(const AnalysisPoint* results, size_t results_len, const Analyze
     tft.drawCircle(x_screen+(width*3/4), y_screen+(height/2), width/4, WHITE);
     // and draw the outer circle for reference
     tft.drawCircle(x_screen+(width/2), y_screen+(height/2), width/2, WHITE);
-
 
     //cutoff swr circles
     int16_t center[2];
@@ -206,6 +203,38 @@ void graph_smith(const AnalysisPoint* results, size_t results_len, const Analyze
             tft.drawLine(xy_start[0], xy_start[1], xy_end[0], xy_end[1], YELLOW);
         }
     }
+}
+
+void draw_smith_pointer(const AnalysisPoint* results, size_t results_len, size_t swr_i, size_t old_swr_i, const Analyzer* analyzer) {
+    int16_t x_screen = 8*2;
+    int16_t y_screen = 8*TITLE_TEXT_SIZE*2;
+    int16_t width = tft.width()-x_screen;
+    int16_t height = tft.height()-y_screen-8*2;
+
+    // gamma range, x is real, y is imag
+    float x_min = -1;
+    float x_max = 1;
+    float y_min = 1;
+    float y_max = -1;
+
+    if (results_len == 0) {
+        return;
+    }
+    uint32_t start_fq = results[0].fq;
+    uint32_t end_fq = results[results_len-1].fq;
+    int16_t pointer_width = 8;
+    int16_t pointer_height = 8;
+
+    //first clear the old swr pointer
+    int16_t xy_pointer[2];
+    Complex gamma_pointer = analyzer->calibrated_gamma(results[old_swr_i].uncal_z);
+    translate_to_screen(gamma_pointer.real(), gamma_pointer.imag(), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, xy_pointer);
+    tft.fillTriangle(xy_pointer[0], xy_pointer[1], xy_pointer[0]-pointer_width/2, xy_pointer[1]+pointer_height, xy_pointer[0]+pointer_width/2, xy_pointer[1]+pointer_height, BLACK);
+
+    //draw the "pointer"
+    gamma_pointer = analyzer->calibrated_gamma(results[swr_i].uncal_z);
+    translate_to_screen(gamma_pointer.real(), gamma_pointer.imag(), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, xy_pointer);
+    tft.drawTriangle(xy_pointer[0], xy_pointer[1], xy_pointer[0]-pointer_width/2, xy_pointer[1]+pointer_height, xy_pointer[0]+pointer_width/2, xy_pointer[1]+pointer_height, GREEN);
 }
 
 #endif //_GRAPH_H

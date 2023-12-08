@@ -537,6 +537,7 @@ void enter_option(int32_t option_id) {
             pointer_moves = 0;
             swr_i = 0;
             graph_smith(analysis_results, analysis_results_len, &analyzer);
+            draw_smith_pointer(analysis_results, analysis_results_len, swr_i, swr_i, &analyzer);
             draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             break;
         }
@@ -657,7 +658,20 @@ void handle_option() {
             if (click) {
                 menu_back();
             } else if (turn != 0) {
-                // move the pointer on the smith chart
+                // move the "pointer" on the smith chart
+                size_t old_swr_i = swr_i;
+
+                int32_t inc = (uint32_t(1) << (uint32_t(encoder.speed()/3)));
+                swr_i = constrain((int32_t)swr_i+inc*turn, 0, analysis_results_len-1);
+                assert(swr_i < analysis_results_len);
+                if (pointer_moves > POINTER_MOVES_REDRAW) {
+                    graph_smith(analysis_results, analysis_results_len, &analyzer);
+                    pointer_moves = 0;
+                } else {
+                    pointer_moves++;
+                }
+                draw_smith_pointer(analysis_results, analysis_results_len, swr_i, old_swr_i, &analyzer);
+                draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             }
             break;
         case MOPT_FQCENTER:
@@ -748,17 +762,17 @@ void handle_serial_command() {
             Serial.print("SWR:\t");
             Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[idx].uncal_z)));
         }
-    } else if(strncmp(serial_command, "results") == 0) {
+    } else if(strncmp(serial_command, "results", serial_command_len) == 0) {
         for (size_t i=0; i<analysis_results_len; i++) {
             Serial.print(analysis_results[i].fq);
             Serial.print("\t");
-            Serial.print(analysis_results[idx].uncal_z);
+            Serial.print(analysis_results[i].uncal_z);
             Serial.print("\t");
-            Serial.print(compute_gamma(analysis_results[idx].uncal_z, 50));
+            Serial.print(compute_gamma(analysis_results[i].uncal_z, 50));
             Serial.print("\t");
-            Serial.print(analyzer.calibrated_gamma(analysis_results[idx].uncal_z));
+            Serial.print(analyzer.calibrated_gamma(analysis_results[i].uncal_z));
             Serial.print("\t");
-            Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[idx].uncal_z)));
+            Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[i].uncal_z)));
         }
     } else {
         char* buf = (char*)malloc(serial_command_len+1);
