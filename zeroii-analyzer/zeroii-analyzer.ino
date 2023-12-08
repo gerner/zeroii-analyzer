@@ -7,6 +7,8 @@
 #include "Adafruit_TFTLCD.h"
 #include "TouchScreen.h"
 
+#include "EEPROM.h"
+
 #include "analyzer.h"
 #include "menu_manager.h"
 #include "button.h"
@@ -76,9 +78,84 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 Analyzer analyzer(Z0);
 // holds the most recent set of analysis results, initialize to zero length
 // array so we can realloc it below
-size_t swr_i = 0;
 size_t analysis_results_len = 0;
 AnalysisPoint analysis_results[MAX_STEPS];
+
+// magic bytes to indicate we've got saved settings
+// also encodes the settings version number
+const uint8_t MAGIC_BYTES[4] = {0xFB, 0xAD, 0x00, 0x01};
+const size_t MAGIC_BYTES_IDX = 0;
+const size_t SETTINGS_IDX = MAGIC_BYTES_IDX + sizeof(MAGIC_BYTES);
+const size_t RESULTS_IDX = SETTINGS_IDX + Analyzer::data_size;
+
+void write_to_eeprom(size_t idx, const uint8_t* data, size_t sz) {
+    for(size_t i; i<sz; i++) {
+        EEPROM.write(idx+i, data[i]);
+    }
+}
+
+void read_from_eeprom(size_t idx, uint8_t* data, size_t sz) {
+    for(size_t i; i<sz; i++) {
+        data[i] = EEPROM.read(idx+i);
+    }
+}
+
+size_t save_magic_bytes(size_t idx=MAGIC_BYTES_IDX) {
+    write_to_eeprom(idx, MAGIC_BYTES, sizeof(MAGIC_BYTES));
+}
+
+size_t save_settings(size_t idx=SETTINGS_IDX) {
+    uint8_t analyzer_data[Analyzer::data_size];
+    analyzer.save_settings(analyzer_data);
+    write_to_eeprom(idx, analyzer_data, Analyzer::data_size);
+    return Analyzer::data_size;
+}
+
+size_t save_results(size_t idx=RESULTS_IDX) {
+    if (EEPROM.length() < idx+analysis_results_len*AnalysisPoint::data_size+sizeof(analysis_results_len)) {
+        // skip writing the results since we can't save them all
+        // assume we at least have enough to write a zero
+        size_t zero = 0;
+        write_to_eeprom(idx, (uint8_t*)&zero, sizeof(zero));
+        return sizeof(zero);
+    }
+    write_to_eeprom(idx, (uint8_t*)&analysis_results_len, sizeof(analysis_results_len));
+    idx += sizeof(analysis_results_len);
+
+    uint8_t result_data[AnalysisPoint::data_size];
+    for(size_t i=0; i<analysis_results_len; i++, idx+=AnalysisPoint::data_size) {
+        AnalysisPoint::to_bytes(analysis_results[i], result_data);
+        write_to_eeprom(idx, result_data, AnalysisPoint::data_size);
+    }
+
+    return sizeof(analysis_results_len) + analysis_results_len*AnalysisPoint::data_size;
+}
+
+size_t load_settings(size_t idx=SETTINGS_IDX) {
+    //load analyzer settings
+    uint8_t analyzer_data[Analyzer::data_size];
+    for(size_t i=0; i<Analyzer::data_size; i++) {
+        analyzer_data[i] = EEPROM.read(idx+i);
+    }
+    analyzer.load_settings(analyzer_data);
+    return Analyzer::data_size;
+}
+
+size_t load_results(size_t idx=RESULTS_IDX) {
+    //load analysis results
+    size_t num_results;
+    read_from_eeprom(idx, (uint8_t*)&num_results, sizeof(size_t));
+    idx += sizeof(size_t);
+    analysis_results_len = num_results;
+
+    uint8_t result_data[AnalysisPoint::data_size];
+    for(size_t i=0; i<num_results; i++, idx+=AnalysisPoint::data_size) {
+        read_from_eeprom(idx, result_data, AnalysisPoint::data_size);
+        analysis_results[i] = AnalysisPoint::from_bytes(result_data);
+    }
+    return sizeof(size_t) + num_results*AnalysisPoint::data_size;
+}
+
 MD_REncoder encoder(CLK, DT);
 Button button(SW);
 
@@ -119,6 +196,8 @@ MenuManager menu_manager(&root_menu);
 uint32_t startFq = 28300000;
 uint32_t endFq = 28500000;
 uint16_t dotsNumber = 100;
+
+#include "graph.h"
 
 enum CAL_STEP { CAL_START, CAL_S, CAL_O, CAL_L, CAL_END };
 
@@ -396,6 +475,23 @@ class FqSetter {
 
 FqSetter fq_setter;
 
+void analyze(uint32_t startFq, uint32_t endFq, uint16_t dotsNumber, AnalysisPoint* results) {
+    uint32_t fq = startFq;
+    uint32_t stepFq = (endFq - startFq)/dotsNumber;
+
+    Serial.println(String("analyzing startFq ")+startFq+" endFq "+endFq+" dotsNumber "+dotsNumber);
+
+    for(size_t i = 0; i <= dotsNumber; ++i, fq+=stepFq)
+    {
+        Serial.println(String("analyzing fq ")+fq);
+        Complex res = analyzer.uncalibrated_measure(fq);
+        Serial.println("putting into results array");
+        Serial.flush();
+        results[i] = AnalysisPoint(fq, res);
+    }
+    Serial.println("analysis complete");
+}
+
 void enter_option(int32_t option_id) {
     switch(option_id) {
         case MOPT_FQCENTER: {
@@ -411,12 +507,14 @@ void enter_option(int32_t option_id) {
         case MOPT_FQSTART: fq_setter.initialize(startFq); break;
         case MOPT_FQEND: fq_setter.initialize(endFq); break;
         case MOPT_CALIBRATE: calibrator.initialize((endFq-startFq)/2); break;
-        case MOPT_SWR:
+        case MOPT_SWR: {
+            pointer_moves = 0;
             swr_i = 0;
             graph_swr(analysis_results, analysis_results_len);
             draw_swr_pointer(analysis_results, analysis_results_len, swr_i, swr_i);
             draw_swr_title(analysis_results, analysis_results_len, swr_i);
             break;
+        }
     }
 }
 
@@ -491,6 +589,11 @@ void handle_option() {
             Serial.println("Analyzing...");
             analysis_results_len = dotsNumber;
             analyze(startFq, endFq, dotsNumber, analysis_results);
+            Serial.println("Saving results...");
+            Serial.flush();
+            save_results();
+            Serial.println("Results saved.");
+            Serial.flush();
             menu_back();
             menu_manager.select_option(MOPT_SWR);
             choose_option();
@@ -502,8 +605,15 @@ void handle_option() {
                 // move the "pointer" on the swr graph
                 size_t old_swr_i = swr_i;
 
-                int32_t inc = (uint32_t(1) << (uint32_t(encoder.speed()/2)));
-                swr_i = constrain(swr_i+turn*inc, 0, analysis_results_len);
+                int32_t inc = (uint32_t(1) << (uint32_t(encoder.speed()/3)));
+                swr_i = constrain((int32_t)swr_i+inc*turn, 0, analysis_results_len-1);
+                assert(swr_i < analysis_results_len);
+                if (pointer_moves > POINTER_MOVES_REDRAW) {
+                    graph_swr(analysis_results, analysis_results_len);
+                    pointer_moves = 0;
+                } else {
+                    pointer_moves++;
+                }
                 draw_swr_pointer(analysis_results, analysis_results_len, swr_i, old_swr_i);
                 draw_swr_title(analysis_results, analysis_results_len, swr_i);
             }
@@ -526,12 +636,65 @@ void handle_option() {
         case MOPT_CALIBRATE: {
             uint8_t calibration_state = calibrator.calibration_step();
             if (calibration_state == CAL_END) {
+                save_settings();
                 menu_back();
             }
             break;
         }
         default:
             break;
+    }
+}
+
+#define MAX_SERIAL_COMMAND 128
+char serial_command[MAX_SERIAL_COMMAND];
+size_t serial_command_len = 0;
+bool read_serial_command() {
+    int c;
+    while(serial_command_len < MAX_SERIAL_COMMAND && ((c = Serial.read()) > 0)) {
+        if(c == '\n') {
+            return true;
+        }
+        serial_command[serial_command_len++] = c;
+    }
+    if(serial_command_len == MAX_SERIAL_COMMAND) {
+        serial_command_len = 0;
+    }
+    return false;
+}
+
+int str2int(const char* str, int len)
+{
+    int i;
+    int ret = 0;
+    for(i = 0; i < len; ++i)
+    {
+        if(str[i] < '0' || str [i] > '9') {
+            return ret;
+        } else {
+            ret = ret * 10 + (str[i] - '0');
+        }
+    }
+    return ret;
+}
+
+void handle_serial_command() {
+    if(strncmp(serial_command, "reset", serial_command_len) == 0) {
+        Serial.println("resetting");
+        NVIC_SystemReset();
+    } else if(strncmp(serial_command, "eeprom ", min(serial_command_len, 7)) == 0) {
+        int idx = str2int(serial_command+7, serial_command_len-7);
+        Serial.println(String("eeprom idx ")+idx+": 0x"+String(EEPROM.read(idx), HEX));
+    } else {
+        char* buf = (char*)malloc(serial_command_len+1);
+        memcpy(buf, serial_command, serial_command_len);
+        buf[serial_command_len] = 0;
+        Serial.print(serial_command[0]);
+        Serial.print(serial_command[1]);
+        Serial.print(serial_command[3]);
+        Serial.print(serial_command[4]);
+        Serial.println(String("unknown command of length ")+serial_command_len+": '"+buf+"'");
+        free(buf);
     }
 }
 
@@ -558,6 +721,7 @@ void setup() {
     tft.setTextColor(WHITE);
     tft.setTextSize(2);
     Serial.println("TFT started.");
+    tft.println("Initializing...");
 
     //Serial.println("resetting ZEROII");
     //pinMode(ZEROII_Reset_Pin, OUTPUT);
@@ -566,6 +730,7 @@ void setup() {
     //digitalWrite(ZEROII_Reset_Pin, HIGH);
 
     Serial.println("starting ZEROII...");
+    tft.println("Starting ZEROII...");
     pinMode(ZERO_II_RST, OUTPUT);
     digitalWrite(ZERO_II_RST, LOW);
     delay(50);
@@ -590,8 +755,28 @@ void setup() {
     button.begin();
     Serial.println("Encoder/button started.");
 
+    Serial.println("checking for settings...");
+    uint8_t settings_header[4];
+    settings_header[0] = EEPROM.read(0);
+    settings_header[1] = EEPROM.read(1);
+    settings_header[2] = EEPROM.read(2);
+    settings_header[3] = EEPROM.read(3);
+    if(memcmp(settings_header, MAGIC_BYTES, sizeof(MAGIC_BYTES)) == 0) {
+        Serial.println("loading settings...");
+        tft.println("Loading saved settings...");
+        load_settings();
+        load_results();
+        Serial.println("settings loaded.");
+    } else {
+        // initialize saved state
+        save_magic_bytes();
+        save_settings();
+        save_results();
+        Serial.println("header didn't match, skipping settings");
+    }
 
     Serial.println("Initialization complete.");
+    tft.println("Initializing complete.");
 
     tft.fillScreen(BLACK);
     draw_title();
@@ -608,6 +793,12 @@ void loop() {
         turn = 0;
     }
     click = button.read();
+
+    if(read_serial_command()) {
+        handle_serial_command();
+        serial_command_len = 0;
+    }
+
     handle_option();
     // TODO: if we're in a measurement, allow cancelling it by clicking
 }
@@ -628,124 +819,6 @@ void analyze_frequency(uint32_t fq) {
     Serial.print(", Zuncal: ");
     Serial.print(uncal_z);
     Serial.print("\r\n");
-}
-
-void analyze(uint32_t startFq, uint32_t endFq, uint16_t dotsNumber, AnalysisPoint* results) {
-    uint32_t fq = startFq;
-    uint32_t stepFq = (endFq - startFq)/dotsNumber;
-
-    Serial.println(String("analyzing startFq ")+startFq+" endFq "+endFq+" dotsNumber "+dotsNumber);
-
-    for(size_t i = 0; i <= dotsNumber; ++i, fq+=stepFq)
-    {
-        Serial.println(String("analyzing fq ")+fq);
-        Complex res = analyzer.uncalibrated_measure(fq);
-        Serial.println("putting into results array");
-        Serial.flush();
-        results[i] = AnalysisPoint(fq, res);
-    }
-    Serial.println("analysis complete");
-}
-
-void translate_to_screen(float x_in, float y_in, float x_min, float x_max, float y_min, float y_max, int16_t x_screen, int16_t y_screen, int16_t width, int16_t height, int* xy) {
-    float x_range = x_max - x_min;
-    float y_range = y_max - y_min;
-    xy[0] = (x_in - x_min) / x_range * width + x_screen;
-    xy[1] = (y_in - y_min) / y_range * height + y_screen;
-
-    Serial.println(String(x_in)+" -> "+xy[0]+" "+y_in+" -> "+xy[1]);
-    Serial.flush();
-}
-
-void graph_swr(AnalysisPoint* results, size_t results_len) {
-    Serial.println(String("graphing swr plot with ")+results_len+" points");
-    Serial.flush();
-    // area is just below the title
-    tft.fillRect(0, 5*2*8, tft.width(), 3*8*3, BLACK);
-    tft.fillRect(0, 8*TITLE_TEXT_SIZE, tft.width(), tft.height()-8*TITLE_TEXT_SIZE, BLACK);
-
-    // draw axes
-    // x ranges from start fq to end fq
-    // y ranges from 1 to 5
-    int16_t x_screen = 8*2;
-    int16_t y_screen = 8*TITLE_TEXT_SIZE*2;
-    int16_t width = tft.width()-x_screen;
-    int16_t height = tft.height()-y_screen-8*2;
-    tft.drawFastHLine(x_screen, y_screen+height, width, WHITE);
-    tft.drawFastVLine(x_screen, y_screen, height, WHITE);
-
-    int xy_cutoff[2];
-    translate_to_screen(0, 3, startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_cutoff);
-    tft.drawFastHLine(x_screen, xy_cutoff[1], width, RED);
-    translate_to_screen(0, 1.5, startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_cutoff);
-    tft.drawFastHLine(x_screen, xy_cutoff[1], width, MAGENTA);
-    // draw all the analysis points
-    if (results_len == 0) {
-        Serial.println("no results to plot");
-        return;
-    } else if (results_len == 1) {
-        int xy[2];
-        translate_to_screen(results[0].fq, compute_swr(analyzer.calibrated_gamma(results[0].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy);
-        tft.fillCircle(xy[0], xy[1], 3, YELLOW);
-    } else {
-        for (size_t i=0; i<results_len-1; i++) {
-            float swr = compute_swr(analyzer.calibrated_gamma(results[i].uncal_gamma));
-            int xy_start[2];
-            translate_to_screen(results[i].fq, swr, startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_start);
-            int xy_end[2];
-            translate_to_screen(results[i+1].fq, compute_swr(analyzer.calibrated_gamma(results[i+1].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_end);
-            Serial.println(String("drawing line ")+xy_start[0]+","+xy_start[1]+" to "+xy_end[0]+","+xy_end[1]);
-            tft.drawLine(xy_start[0], xy_start[1], xy_end[0], xy_end[1], YELLOW);
-        }
-    }
-}
-
-void draw_swr_pointer(AnalysisPoint* results, size_t analysis_results_len, size_t swr_i, size_t old_swr_i) {
-    // x ranges from start fq to end fq
-    // y ranges from 1 to 5
-    int16_t x_screen = 8*2;
-    int16_t y_screen = 8*TITLE_TEXT_SIZE*2;
-    int16_t width = tft.width()-x_screen;
-    int16_t height = tft.height()-y_screen-8*2;
-
-    if (analysis_results_len == 0) {
-        return;
-    }
-    int16_t pointer_width = 8;
-    int16_t pointer_height = 8;
-
-    //first clear the old swr pointer
-    int xy_pointer[2];
-    translate_to_screen(results[old_swr_i].fq, compute_swr(analyzer.calibrated_gamma(results[old_swr_i].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_pointer);
-    tft.fillTriangle(xy_pointer[0], xy_pointer[1], xy_pointer[0]-pointer_width/2, xy_pointer[1]+pointer_height, xy_pointer[0]+pointer_width/2, xy_pointer[1]+pointer_height, BLACK);
-
-    //draw the "pointer"
-    translate_to_screen(results[swr_i].fq, compute_swr(analyzer.calibrated_gamma(results[swr_i].uncal_gamma)), startFq, endFq, 5, 1, x_screen, y_screen, width, height, xy_pointer);
-    tft.drawTriangle(xy_pointer[0], xy_pointer[1], xy_pointer[0]-pointer_width/2, xy_pointer[1]+pointer_height, xy_pointer[0]+pointer_width/2, xy_pointer[1]+pointer_height, GREEN);
-}
-
-void draw_swr_title(AnalysisPoint* results, size_t results_len, size_t swr_i) {
-    if (analysis_results_len == 0) {
-        tft.println("No SWR results");
-        return;
-    }
-
-    size_t min_swr_i = 0;
-    float min_swr = compute_swr(analyzer.calibrated_gamma(results[results_len-1].uncal_gamma));
-    for (size_t i=0; i<results_len; i++) {
-        float swr = compute_swr(analyzer.calibrated_gamma(results[i].uncal_gamma));
-        if (swr < min_swr) {
-            min_swr = swr;
-            min_swr_i = i;
-        }
-    }
-    //draw the title
-    tft.fillRect(0, 0, tft.width(), 8*TITLE_TEXT_SIZE*2, BLACK);
-    tft.setCursor(0,0);
-    tft.setTextSize(TITLE_TEXT_SIZE);
-
-    tft.println(String("Min SWR: ")+compute_swr(analyzer.calibrated_gamma(results[min_swr_i].uncal_gamma))+" "+frequency_formatter(results[min_swr_i].fq));
-    tft.println(String("Sel SWR: ")+compute_swr(analyzer.calibrated_gamma(results[swr_i].uncal_gamma))+" "+frequency_formatter(results[swr_i].fq));
 }
 
 /*

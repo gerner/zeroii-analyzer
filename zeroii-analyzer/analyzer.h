@@ -81,7 +81,12 @@ class Analyzer {
             Serial.println("start returned");
             Serial.flush();
 
-            return Complex(zeroii_.getR(), zeroii_.getX());
+            float R = zeroii_.getR();
+            float X = zeroii_.getX();
+
+            Serial.println(String("")+R+" + "+X+" i");
+
+            return Complex(R, X);
         }
 
         Complex calibrated_gamma(Complex uncalibrated_z) {
@@ -89,6 +94,31 @@ class Analyzer {
         }
 
         RigExpertZeroII_I2C zeroii_;
+
+        static const size_t data_size = sizeof(float) + sizeof(Complex)*3;
+
+        void load_settings(const uint8_t* data) {
+            z0_ = *(float*)data;
+            cal_short_ = *(Complex*)(data+sizeof(float));
+            cal_open_ = *(Complex*)(data+sizeof(float)+sizeof(Complex));
+            cal_load_ = *(Complex*)(data+sizeof(float)+sizeof(Complex)*2);
+
+            Serial.print("z0: ");
+            Serial.println(z0_);
+            Serial.print("cal_short: ");
+            Serial.println(cal_short_);
+            Serial.print("cal_open: ");
+            Serial.println(cal_open_);
+            Serial.print("cal_load: ");
+            Serial.println(cal_load_);
+        }
+
+        void save_settings(uint8_t* data) {
+            *(float*)data = z0_;
+            *(Complex*)(data+sizeof(float)) = cal_short_;
+            *(Complex*)(data+sizeof(float)+sizeof(Complex)) = cal_open_;
+            *(Complex*)(data+sizeof(float)+sizeof(Complex)*2) = cal_load_;
+        }
 
     private:
         float z0_;
@@ -103,6 +133,21 @@ struct AnalysisPoint {
 
     AnalysisPoint(): fq(0) {}
     AnalysisPoint(uint32_t a_fq, Complex a_uncal_gamma) : fq(a_fq), uncal_gamma(a_uncal_gamma) {}
+
+    static const size_t data_size = sizeof(uint32_t)+sizeof(Complex);
+
+    static AnalysisPoint from_bytes(const uint8_t* data) {
+        // assume data has enough elements
+        uint32_t fq = *(uint32_t*)data;
+        Complex c = *(Complex*)(data+sizeof(uint32_t));
+
+        return AnalysisPoint(fq, c);
+    }
+
+    static void to_bytes(AnalysisPoint point, uint8_t* data) {
+        *(uint32_t*)data = point.fq;
+        *(Complex *)(data+sizeof(uint32_t)) = point.uncal_gamma;
+    }
 };
 
 #endif
