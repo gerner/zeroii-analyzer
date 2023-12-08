@@ -70,7 +70,6 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 #define MAX_FQ 1000000000
 #define MAX_STEPS 128
 
-#define ZERO_II_RST 13
 #define ZERO_I2C_ADDRESS 0x5B
 #define CLK 12
 #define DT 11
@@ -172,16 +171,18 @@ bool click = false;
 #define MOPT_FQWINDOW 5
 #define MOPT_FQSTART 6
 #define MOPT_FQEND 7
-#define MOPT_FQSTEPS 8
-#define MOPT_BACK 9
-#define MOPT_SWR 10
-#define MOPT_SMITH 11
+#define MOPT_FQBAND 8
+#define MOPT_FQSTEPS 9
+#define MOPT_BACK 10
+#define MOPT_SWR 11
+#define MOPT_SMITH 12
 
 MenuOption fq_menu_options[] = {
     MenuOption("Fq Start", MOPT_FQSTART, NULL),
     MenuOption("Fq End", MOPT_FQEND, NULL),
     MenuOption("Fq Center", MOPT_FQCENTER, NULL),
     MenuOption("Fq Range", MOPT_FQWINDOW, NULL),
+    MenuOption("Fq Band", MOPT_FQBAND, NULL),
     MenuOption("Steps", MOPT_FQSTEPS, NULL),
     MenuOption("Back", MOPT_BACK, NULL),
 };
@@ -436,7 +437,7 @@ class FqSetter {
                     // inc scales with how fast you're turning it
                     // inc is direction * 2 ^ speed / 10
                     inc = (uint32_t(1) << (uint32_t(encoder.speed()/2))) * inc;
-                } // else just inc by 1GHz to avoid overflow
+                } //k else just inc by 1GHz to avoid overflow
                 fq_ = constrain(fq_ + turn * inc, min_fq, max_fq);
                 draw_fq_setting(label);
                 return fq_;
@@ -452,6 +453,44 @@ class FqSetter {
 };
 
 FqSetter fq_setter;
+
+uint32_t band_fqs[][2] = { {135700, 137800}, {472000, 479000}, {1800000, 2000000}, {3500000, 4000000}, {5330500, 5406400}, {7000000, 7300000}, {10100000, 10150000}, {14000000, 14350000}, {18068000, 18168000}, {2100000, 21450000}, {24890000, 24990000}, {28000000, 29700000}, {50000000, 54000000}, {144000000, 148000000}, {219000000, 225000000}, {420000000, 450000000}, {902000000, 928000000} };
+String band_names[] = {"2200m", "630m", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "VHF", "1.25m", "UHF", "33cm"};
+class BandSetter {
+    public:
+    void initialize() {
+        band_idx_ = 0;
+        tft.fillRect(0, 5*2*8, tft.width(), 3*8*3, BLACK);
+        tft.setCursor(0, 5*2*8);
+        tft.println("Band:");
+        draw_band_setting();
+    }
+    bool set_band() {
+        if (click) {
+            return true;
+        } else if (turn != 0) {
+            band_idx_ = constrain(band_idx_+turn, 0, sizeof(band_names));
+            draw_band_setting();
+        }
+        return false;
+    }
+    void draw_band_setting() {
+        tft.setTextSize(3);
+        tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
+        tft.setCursor(0, 6*2*8);
+        tft.print("    ");
+        tft.println(band_names[band_idx_]);
+    }
+
+    void band(uint32_t* start_fq, uint32_t* end_fq) {
+        *start_fq = band_fqs[band_idx_][0];
+        *end_fq = band_fqs[band_idx_][1];
+    }
+    private:
+        size_t band_idx_;
+};
+
+BandSetter band_setter;
 
 void analyze(uint32_t startFq, uint32_t endFq, uint16_t dotsNumber, AnalysisPoint* results) {
     uint32_t fq = startFq;
@@ -484,6 +523,7 @@ void enter_option(int32_t option_id) {
         }
         case MOPT_FQSTART: fq_setter.initialize(startFq); break;
         case MOPT_FQEND: fq_setter.initialize(endFq); break;
+        case MOPT_FQBAND: band_setter.initialize(); break;
         case MOPT_CALIBRATE: calibrator.initialize((endFq-startFq)/2); break;
         case MOPT_SWR: {
             pointer_moves = 0;
@@ -531,6 +571,12 @@ void leave_option(int32_t option_id) {
             Serial.println(String("setting end fq to: ") + fq_setter.fq());
             endFq = fq_setter.fq();
             startFq = constrain(startFq, MIN_FQ, endFq-1);
+            draw_title();
+            break;
+        case MOPT_FQBAND:
+            band_setter.band(&startFq, &endFq);
+            Serial.println(String("setting start/end to: ") + startFq + "/" + endFq);
+            tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_SWR:
@@ -626,6 +672,12 @@ void handle_option() {
         case MOPT_FQEND:
             fq_setter.set_fq_value(MIN_FQ, MAX_FQ, "End Frequency");
             break;
+        case MOPT_FQBAND:
+            if (band_setter.set_band()) {
+                menu_back();
+                draw_title();
+            }
+            break;
         case MOPT_FQSTEPS:
             dotsNumber = set_user_value(dotsNumber, 1, 128, "Steps");
             break;
@@ -680,30 +732,38 @@ void handle_serial_command() {
         NVIC_SystemReset();
     } else if(strncmp(serial_command, "eeprom ", min(serial_command_len, 7)) == 0) {
         int idx = str2int(serial_command+7, serial_command_len-7);
-        Serial.println(String("eeprom idx ")+idx+": 0x"+String(EEPROM.read(idx), HEX));
+        Serial.println(String("eeprom idx\t")+idx+":\t0x"+String(EEPROM.read(idx), HEX));
     } else if(strncmp(serial_command, "result ", min(serial_command_len, 7)) == 0) {
         int idx = str2int(serial_command+7, serial_command_len-7);
         if(idx >= analysis_results_len) {
             Serial.println(String("idx ")+idx+" >= "+analysis_results_len);
         } else {
-            Serial.println(String("result idx ")+idx);
-            Serial.print("Raw: ");
+            Serial.println(String("result idx\t")+idx);
+            Serial.print("Raw:\t");
             Serial.println(analysis_results[idx].uncal_z);
-            Serial.print("Uncal gamma: ");
+            Serial.print("Uncal gamma:\t");
             Serial.println(compute_gamma(analysis_results[idx].uncal_z, 50));
-            Serial.print("Cal gamma: ");
+            Serial.print("Cal gamma:\t");
             Serial.println(analyzer.calibrated_gamma(analysis_results[idx].uncal_z));
-            Serial.print("SWR: ");
+            Serial.print("SWR:\t");
+            Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[idx].uncal_z)));
+        }
+    } else if(strncmp(serial_command, "results") == 0) {
+        for (size_t i=0; i<analysis_results_len; i++) {
+            Serial.print(analysis_results[i].fq);
+            Serial.print("\t");
+            Serial.print(analysis_results[idx].uncal_z);
+            Serial.print("\t");
+            Serial.print(compute_gamma(analysis_results[idx].uncal_z, 50));
+            Serial.print("\t");
+            Serial.print(analyzer.calibrated_gamma(analysis_results[idx].uncal_z));
+            Serial.print("\t");
             Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[idx].uncal_z)));
         }
     } else {
         char* buf = (char*)malloc(serial_command_len+1);
         memcpy(buf, serial_command, serial_command_len);
         buf[serial_command_len] = 0;
-        Serial.print(serial_command[0]);
-        Serial.print(serial_command[1]);
-        Serial.print(serial_command[3]);
-        Serial.print(serial_command[4]);
         Serial.println(String("unknown command of length ")+serial_command_len+": '"+buf+"'");
         free(buf);
     }
@@ -734,18 +794,8 @@ void setup() {
     Serial.println("TFT started.");
     tft.println("Initializing...");
 
-    //Serial.println("resetting ZEROII");
-    //pinMode(ZEROII_Reset_Pin, OUTPUT);
-    //digitalWrite(ZEROII_Reset_Pin, LOW);
-    //delay(50);
-    //digitalWrite(ZEROII_Reset_Pin, HIGH);
-
     Serial.println("starting ZEROII...");
     tft.println("Starting ZEROII...");
-    pinMode(ZERO_II_RST, OUTPUT);
-    digitalWrite(ZERO_II_RST, LOW);
-    delay(50);
-    digitalWrite(ZERO_II_RST, HIGH);
     if(!analyzer.zeroii_.startZeroII()) {
         Serial.println("failed to start zeroii");
         tft.println("Failed to start ZeroII. Aborting.");
