@@ -61,6 +61,9 @@ Adafruit_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
 // For the one we're using, its 300 ohms across the X plate
 TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 
+//TODO: cleanup graph.h so it doesn't have to be included here
+#include "graph.h"
+
 //100kHz
 #define MIN_FQ 100000
 //1GHz
@@ -172,6 +175,7 @@ bool click = false;
 #define MOPT_FQSTEPS 8
 #define MOPT_BACK 9
 #define MOPT_SWR 10
+#define MOPT_SMITH 11
 
 MenuOption fq_menu_options[] = {
     MenuOption("Fq Start", MOPT_FQSTART, NULL),
@@ -188,6 +192,7 @@ MenuOption root_menu_options[] = {
     MenuOption("Fq Options", MOPT_FQ, &fq_menu),
     MenuOption("Calibration", MOPT_CALIBRATE, NULL),
     MenuOption("SWR graph", MOPT_SWR, NULL),
+    MenuOption("Smith chart", MOPT_SMITH, NULL),
 };
 Menu root_menu(NULL, root_menu_options, sizeof(root_menu_options)/sizeof(root_menu_options[0]));
 
@@ -197,7 +202,6 @@ uint32_t startFq = 28300000;
 uint32_t endFq = 28500000;
 uint16_t dotsNumber = 100;
 
-#include "graph.h"
 
 enum CAL_STEP { CAL_START, CAL_S, CAL_O, CAL_L, CAL_END };
 
@@ -359,32 +363,6 @@ uint16_t frequency_step(uint32_t fq) {
     }
 }
 
-String frequency_formatter(const int32_t fq) {
-    int int_part, dec_part;
-    char buf[3+1+3+3+1];
-    if (fq > 1ul * 1000ul * 1000ul * 1000ul) {
-        int_part = fq / 1000ul / 1000ul / 1000ul;
-        dec_part = fq / 1000ul / 1000ul % 1000ul;
-        snprintf(buf, sizeof(buf), "%d.%03dGHz", int_part, dec_part);
-        return String(buf);
-    } else if (fq > 1ul * 1000ul * 1000ul) {
-        int_part = fq / 1000ul / 1000ul;
-        dec_part = fq / 1000ul % 1000ul;
-        snprintf(buf, sizeof(buf), "%d.%03dMHz", int_part, dec_part);
-        return String(buf);
-    } else if (fq > 1ul * 1000ul) {
-        int_part = fq / 1000ul;
-        dec_part = fq % 1000ul;
-        snprintf(buf, sizeof(buf), "%d.%03dkHz", int_part, dec_part);
-        return String(buf);
-    } else {
-        int_part = fq;
-        dec_part = 0;
-        snprintf(buf, sizeof(buf), "%d.%03dHz", int_part, dec_part);
-        return String(buf);
-    }
-}
-
 String frequency_parts_formatter(const uint32_t fq) {
     uint16_t ghz_part, mhz_part, khz_part, hz_part;
     char buf[1+3*4+3+1];
@@ -484,10 +462,10 @@ void analyze(uint32_t startFq, uint32_t endFq, uint16_t dotsNumber, AnalysisPoin
     for(size_t i = 0; i <= dotsNumber; ++i, fq+=stepFq)
     {
         Serial.println(String("analyzing fq ")+fq);
-        Complex res = analyzer.uncalibrated_measure(fq);
+        Complex z = analyzer.uncalibrated_measure(fq);
         Serial.println("putting into results array");
         Serial.flush();
-        results[i] = AnalysisPoint(fq, res);
+        results[i] = AnalysisPoint(fq, z);
     }
     Serial.println("analysis complete");
 }
@@ -510,9 +488,16 @@ void enter_option(int32_t option_id) {
         case MOPT_SWR: {
             pointer_moves = 0;
             swr_i = 0;
-            graph_swr(analysis_results, analysis_results_len);
-            draw_swr_pointer(analysis_results, analysis_results_len, swr_i, swr_i);
-            draw_swr_title(analysis_results, analysis_results_len, swr_i);
+            graph_swr(analysis_results, analysis_results_len, &analyzer);
+            draw_swr_pointer(analysis_results, analysis_results_len, swr_i, swr_i, &analyzer);
+            draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+            break;
+        }
+        case MOPT_SMITH: {
+            pointer_moves = 0;
+            swr_i = 0;
+            graph_smith(analysis_results, analysis_results_len, &analyzer);
+            draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             break;
         }
     }
@@ -549,6 +534,10 @@ void leave_option(int32_t option_id) {
             draw_title();
             break;
         case MOPT_SWR:
+            tft.fillScreen(BLACK);
+            draw_title();
+            break;
+        case MOPT_SMITH:
             tft.fillScreen(BLACK);
             draw_title();
             break;
@@ -609,13 +598,20 @@ void handle_option() {
                 swr_i = constrain((int32_t)swr_i+inc*turn, 0, analysis_results_len-1);
                 assert(swr_i < analysis_results_len);
                 if (pointer_moves > POINTER_MOVES_REDRAW) {
-                    graph_swr(analysis_results, analysis_results_len);
+                    graph_swr(analysis_results, analysis_results_len, &analyzer);
                     pointer_moves = 0;
                 } else {
                     pointer_moves++;
                 }
-                draw_swr_pointer(analysis_results, analysis_results_len, swr_i, old_swr_i);
-                draw_swr_title(analysis_results, analysis_results_len, swr_i);
+                draw_swr_pointer(analysis_results, analysis_results_len, swr_i, old_swr_i, &analyzer);
+                draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+            }
+            break;
+        case MOPT_SMITH:
+            if (click) {
+                menu_back();
+            } else if (turn != 0) {
+                // move the pointer on the smith chart
             }
             break;
         case MOPT_FQCENTER:
@@ -685,6 +681,21 @@ void handle_serial_command() {
     } else if(strncmp(serial_command, "eeprom ", min(serial_command_len, 7)) == 0) {
         int idx = str2int(serial_command+7, serial_command_len-7);
         Serial.println(String("eeprom idx ")+idx+": 0x"+String(EEPROM.read(idx), HEX));
+    } else if(strncmp(serial_command, "result ", min(serial_command_len, 7)) == 0) {
+        int idx = str2int(serial_command+7, serial_command_len-7);
+        if(idx >= analysis_results_len) {
+            Serial.println(String("idx ")+idx+" >= "+analysis_results_len);
+        } else {
+            Serial.println(String("result idx ")+idx);
+            Serial.print("Raw: ");
+            Serial.println(analysis_results[idx].uncal_z);
+            Serial.print("Uncal gamma: ");
+            Serial.println(compute_gamma(analysis_results[idx].uncal_z, 50));
+            Serial.print("Cal gamma: ");
+            Serial.println(analyzer.calibrated_gamma(analysis_results[idx].uncal_z));
+            Serial.print("SWR: ");
+            Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[idx].uncal_z)));
+        }
     } else {
         char* buf = (char*)malloc(serial_command_len+1);
         memcpy(buf, serial_command, serial_command_len);

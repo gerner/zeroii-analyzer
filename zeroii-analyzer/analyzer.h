@@ -89,7 +89,7 @@ class Analyzer {
             return Complex(R, X);
         }
 
-        Complex calibrated_gamma(Complex uncalibrated_z) {
+        Complex calibrated_gamma(Complex uncalibrated_z) const {
             return calibrate_reflection(cal_short_, cal_open_, cal_load_, compute_gamma(uncalibrated_z, z0_));
         }
 
@@ -129,10 +129,10 @@ class Analyzer {
 
 struct AnalysisPoint {
     uint32_t fq;
-    Complex uncal_gamma;
+    Complex uncal_z;
 
     AnalysisPoint(): fq(0) {}
-    AnalysisPoint(uint32_t a_fq, Complex a_uncal_gamma) : fq(a_fq), uncal_gamma(a_uncal_gamma) {}
+    AnalysisPoint(uint32_t a_fq, Complex a_uncal_z) : fq(a_fq), uncal_z(a_uncal_z) {}
 
     static const size_t data_size = sizeof(uint32_t)+sizeof(Complex);
 
@@ -146,7 +146,7 @@ struct AnalysisPoint {
 
     static void to_bytes(AnalysisPoint point, uint8_t* data) {
         *(uint32_t*)data = point.fq;
-        *(Complex *)(data+sizeof(uint32_t)) = point.uncal_gamma;
+        *(Complex *)(data+sizeof(uint32_t)) = point.uncal_z;
     }
 };
 
