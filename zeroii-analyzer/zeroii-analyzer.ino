@@ -13,6 +13,23 @@
 #include "menu_manager.h"
 #include "button.h"
 
+#define VBATT_ALPHA 0.05
+#define BATT_SENSE_PIN A3
+#define BATT_SENSE_PERIOD 3000
+float vbatt = 8.0;
+uint32_t last_vbatt = 0;
+void init_vbatt() {
+    uint16_t batt_raw = analogRead(BATT_SENSE_PIN);
+    vbatt = batt_raw * 5.0 / 1023.0 * 2;
+    last_vbatt = millis();
+}
+void update_vbatt() {
+    uint16_t batt_raw = analogRead(BATT_SENSE_PIN);
+
+    vbatt = ((1.0-VBATT_ALPHA) * vbatt) + ((VBATT_ALPHA) * (batt_raw * 5.0 / 1023.0 * 2));
+    last_vbatt = millis();
+}
+
 // These are the four touchscreen analog pins
 #define YP A2  // must be an analog pin, use "An" notation!
 #define XM A3  // must be an analog pin, use "An" notation!
@@ -31,7 +48,7 @@
  // The control pins for the LCD can be assigned to any digital or
 // analog pins...but we'll use the analog pins as this allows us to
 // double up the pins with the touch screen (see the TFT paint example).
-#define LCD_CS A3 // Chip Select goes to Analog 3
+#define LCD_CS 13//A3 // Chip Select goes to Analog 3
 #define LCD_CD A2 // Command/Data goes to Analog 2
 #define LCD_WR A1 // LCD Write goes to Analog 1
 #define LCD_RD A0 // LCD Read goes to Analog 0
@@ -77,11 +94,32 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 
 #define Z0 50
 
+#define PROGRESS_METER_X 8*2*4
+#define PROGRESS_METER_Y 8*2*4
+#define PROGRESS_METER_WIDTH (tft.width()-PROGRESS_METER_Y*2)
+
 Analyzer analyzer(Z0);
 // holds the most recent set of analysis results, initialize to zero length
 // array so we can realloc it below
 size_t analysis_results_len = 0;
 AnalysisPoint analysis_results[MAX_STEPS];
+
+void initialize_progress_meter(String label) {
+    tft.fillRect(PROGRESS_METER_X, PROGRESS_METER_Y, PROGRESS_METER_WIDTH, 8*2*2, BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(PROGRESS_METER_X, PROGRESS_METER_Y);
+    tft.print(label);
+    tft.drawRect(PROGRESS_METER_X, PROGRESS_METER_Y+8*2, PROGRESS_METER_WIDTH, 7*2, WHITE);
+}
+
+void draw_progress_meter(size_t total, size_t current) {
+    tft.fillRect(PROGRESS_METER_X, PROGRESS_METER_Y+8*2, PROGRESS_METER_WIDTH*current/total, 7*2, WHITE);
+    tft.fillRect(PROGRESS_METER_X, PROGRESS_METER_Y+8*2*2, PROGRESS_METER_WIDTH, 8*2, BLACK);
+    tft.setCursor(PROGRESS_METER_X, PROGRESS_METER_Y+8*2*2);
+    tft.print(current);
+    tft.print("/");
+    tft.print(total);
+}
 
 // magic bytes to indicate we've got saved settings
 // also encodes the settings version number
@@ -111,6 +149,32 @@ size_t save_settings(size_t idx=SETTINGS_IDX) {
     analyzer.save_settings(analyzer_data);
     write_to_eeprom(idx, analyzer_data, Analyzer::data_size);
     return Analyzer::data_size;
+}
+
+size_t save_results_len(size_t idx=RESULTS_IDX) {
+    if (EEPROM.length() < idx+analysis_results_len*AnalysisPoint::data_size+sizeof(analysis_results_len)) {
+        // skip writing the results since we can't save them all
+        // assume we at least have enough to write a zero
+        size_t zero = 0;
+        write_to_eeprom(idx, (uint8_t*)&zero, sizeof(zero));
+        return sizeof(zero);
+    }
+
+    write_to_eeprom(idx, (uint8_t*)&analysis_results_len, sizeof(analysis_results_len));
+    return sizeof(analysis_results_len);
+}
+
+size_t save_result(size_t i, size_t idx=RESULTS_IDX) {
+    if (EEPROM.length() < idx+analysis_results_len*AnalysisPoint::data_size+sizeof(analysis_results_len)) {
+        return 0;
+    }
+
+    uint8_t result_data[AnalysisPoint::data_size];
+
+    AnalysisPoint::to_bytes(analysis_results[i], result_data);
+    write_to_eeprom(idx+sizeof(analysis_results_len)+i*AnalysisPoint::data_size, result_data, AnalysisPoint::data_size);
+
+    return AnalysisPoint::data_size;
 }
 
 size_t save_results(size_t idx=RESULTS_IDX) {
@@ -158,6 +222,92 @@ size_t load_results(size_t idx=RESULTS_IDX) {
     return sizeof(size_t) + num_results*AnalysisPoint::data_size;
 }
 
+class ResultSaver {
+    public:
+    void initialize(AnalysisPoint* results, size_t results_len) {
+        Serial.println("Saving results...");
+        results_ = results;
+        result_idx_ = 0;
+        results_len_ = results_len;
+
+        save_results_len();
+
+        tft.fillScreen(BLACK);
+        draw_title();
+        initialize_progress_meter("Saving results...");
+    }
+
+    bool save() {
+        if (result_idx_ >= results_len_) {
+            return true;
+        }
+
+        // save one result
+        save_result(result_idx_);
+        result_idx_ ++;
+
+        // update progress meter
+        draw_progress_meter(results_len_, result_idx_);
+
+        return false;
+    }
+
+    private:
+    AnalysisPoint* results_;
+    size_t result_idx_;
+    size_t results_len_;
+};
+
+ResultSaver result_saver;
+
+enum ANALYSIS_STATE { ANALYZE, SAVE_RESULTS };
+class AnalysisProcessor {
+    public:
+    void initialize(uint32_t start_fq, uint32_t end_fq, uint16_t steps, AnalysisPoint* results) {
+        state_ = ANALYZE;
+        fq_ = start_fq;
+        steps_ = steps;
+        step_fq_ = (end_fq - start_fq)/steps;
+        results_ = results;
+        result_idx_ = 0;
+
+        Serial.println(String("analyzing startFq ")+start_fq+" endFq "+end_fq+" steps "+steps);
+        tft.fillScreen(BLACK);
+        draw_title();
+        initialize_progress_meter("Analyzing...");
+    }
+
+    bool analyze() {
+        if (result_idx_ >= steps_) {
+            return true;
+        }
+
+        Serial.println(String("analyzing fq ")+fq_);
+        Complex z = analyzer.uncalibrated_measure(fq_);
+        Serial.println("putting into results array");
+        Serial.flush();
+        results_[result_idx_] = AnalysisPoint(fq_, z);
+        fq_ += step_fq_;
+        result_idx_++;
+
+        // update progress meter
+        draw_progress_meter(steps_, result_idx_);
+
+        return false;
+    }
+
+
+    private:
+    uint8_t state_;
+    uint32_t fq_;
+    uint32_t step_fq_;
+    AnalysisPoint* results_;
+    size_t steps_;
+    size_t result_idx_;
+};
+
+AnalysisProcessor analysis_processor;
+
 MD_REncoder encoder(CLK, DT);
 Button button(SW);
 
@@ -176,6 +326,7 @@ bool click = false;
 #define MOPT_BACK 10
 #define MOPT_SWR 11
 #define MOPT_SMITH 12
+#define MOPT_SAVE_RESULTS 13
 
 MenuOption fq_menu_options[] = {
     MenuOption("Fq Start", MOPT_FQSTART, NULL),
@@ -194,6 +345,7 @@ MenuOption root_menu_options[] = {
     MenuOption("Calibration", MOPT_CALIBRATE, NULL),
     MenuOption("SWR graph", MOPT_SWR, NULL),
     MenuOption("Smith chart", MOPT_SMITH, NULL),
+    MenuOption("Save Results", MOPT_SAVE_RESULTS, NULL),
 };
 Menu root_menu(NULL, root_menu_options, sizeof(root_menu_options)/sizeof(root_menu_options[0]));
 
@@ -274,6 +426,14 @@ void draw_title() {
     tft.print(frequency_formatter(startFq) + " to " + frequency_formatter(endFq));
     tft.print(" Steps: ");
     tft.print(dotsNumber);
+}
+
+void draw_vbatt() {
+    tft.fillRect(tft.width() - 6*TITLE_TEXT_SIZE*5, 0, 6*TITLE_TEXT_SIZE*5, 8*TITLE_TEXT_SIZE, BLACK);
+    tft.setCursor(tft.width() - 6*TITLE_TEXT_SIZE*5, 0);
+    tft.setTextSize(TITLE_TEXT_SIZE);
+    tft.print(vbatt);
+    tft.print("v");
 }
 
 void clear_menu(Menu* current_menu) {
@@ -460,7 +620,8 @@ class BandSetter {
     public:
     void initialize() {
         band_idx_ = 0;
-        tft.fillRect(0, 5*2*8, tft.width(), 3*8*3, BLACK);
+        tft.fillScreen(BLACK);
+        draw_title();
         tft.setCursor(0, 5*2*8);
         tft.println("Band:");
         draw_band_setting();
@@ -511,6 +672,13 @@ void analyze(uint32_t startFq, uint32_t endFq, uint16_t dotsNumber, AnalysisPoin
 
 void enter_option(int32_t option_id) {
     switch(option_id) {
+        case MOPT_ANALYZE:
+            analysis_results_len = dotsNumber;
+            analysis_processor.initialize(startFq, endFq, dotsNumber, analysis_results);
+            break;
+        case MOPT_SAVE_RESULTS:
+            result_saver.initialize(analysis_results, analysis_results_len);
+            break;
         case MOPT_FQCENTER: {
             int32_t centerFq = startFq + (endFq-startFq)/2;
             fq_setter.initialize(centerFq);
@@ -551,6 +719,7 @@ void leave_option(int32_t option_id) {
             // move [startFq, endFq] so it's centered on desired value
             startFq = constrain(fq_setter.fq() - (endFq - startFq)/2, MIN_FQ, MAX_FQ);
             endFq = constrain(fq_setter.fq() + (endFq - startFq)/2, MIN_FQ, MAX_FQ);
+            tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_FQWINDOW: {
@@ -559,6 +728,7 @@ void leave_option(int32_t option_id) {
             int32_t cntFq = startFq + (endFq - startFq)/2;
             startFq = constrain(cntFq - fq_setter.fq()/2, MIN_FQ, MAX_FQ);
             endFq = constrain(cntFq + fq_setter.fq()/2, MIN_FQ, MAX_FQ);
+            tft.fillScreen(BLACK);
             draw_title();
             break;
         }
@@ -566,17 +736,27 @@ void leave_option(int32_t option_id) {
             Serial.println(String("setting start fq to: ") + fq_setter.fq());
             startFq = fq_setter.fq();
             endFq = constrain(endFq, startFq+1, MAX_FQ);
+            tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_FQEND:
             Serial.println(String("setting end fq to: ") + fq_setter.fq());
             endFq = fq_setter.fq();
             startFq = constrain(startFq, MIN_FQ, endFq-1);
+            tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_FQBAND:
             band_setter.band(&startFq, &endFq);
             Serial.println(String("setting start/end to: ") + startFq + "/" + endFq);
+            tft.fillScreen(BLACK);
+            draw_title();
+            break;
+        case MOPT_ANALYZE:
+            tft.fillScreen(BLACK);
+            draw_title();
+            break;
+        case MOPT_SAVE_RESULTS:
             tft.fillScreen(BLACK);
             draw_title();
             break;
@@ -622,17 +802,16 @@ void handle_option() {
             menu_back();
             break;
         case MOPT_ANALYZE:
-            Serial.println("Analyzing...");
-            analysis_results_len = dotsNumber;
-            analyze(startFq, endFq, dotsNumber, analysis_results);
-            Serial.println("Saving results...");
-            Serial.flush();
-            save_results();
-            Serial.println("Results saved.");
-            Serial.flush();
-            menu_back();
-            menu_manager.select_option(MOPT_SWR);
-            choose_option();
+            if (analysis_processor.analyze()) {
+                menu_back();
+                menu_manager.select_option(MOPT_SWR);
+                choose_option();
+            }
+            break;
+        case MOPT_SAVE_RESULTS:
+            if (result_saver.save()) {
+                menu_back();
+            }
             break;
         case MOPT_SWR:
             if (click) {
@@ -741,6 +920,9 @@ int str2int(const char* str, int len)
 }
 
 void handle_serial_command() {
+    if(serial_command_len == 0) {
+        return;
+    }
     if(strncmp(serial_command, "reset", serial_command_len) == 0) {
         Serial.println("resetting");
         NVIC_SystemReset();
@@ -774,6 +956,18 @@ void handle_serial_command() {
             Serial.print("\t");
             Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[i].uncal_z)));
         }
+    } else if(strncmp(serial_command, "batt", serial_command_len) == 0) {
+        uint16_t batt_raw = analogRead(A3);
+        Serial.print(batt_raw);
+        Serial.print("\t");
+        Serial.print(batt_raw*5.0/1023.0*2);
+        Serial.print("\t");
+        Serial.println(vbatt);
+    } else if(strncmp(serial_command, "aref", serial_command_len) == 0) {
+        Serial.print(analogRead(AVCC_MEASURE_PIN));
+        Serial.print("\t");
+        Serial.print(analogReference());
+        Serial.print("\n");
     } else {
         char* buf = (char*)malloc(serial_command_len+1);
         memcpy(buf, serial_command, serial_command_len);
@@ -795,8 +989,11 @@ void setup_failed() {
 void setup() {
     Serial.begin(38400);
     Serial.flush();
+
     tft.println("Initializing...");
     digitalWrite(LED_BUILTIN, 0);
+
+    init_vbatt();
 
     Serial.println("starting TFT...");
     tft.begin(tft.readID());
@@ -859,6 +1056,10 @@ void setup() {
 }
 
 void loop() {
+    if (last_vbatt + BATT_SENSE_PERIOD < millis()) {
+        update_vbatt();
+        draw_vbatt();
+    }
     uint8_t encoder_state = encoder.read();
     if (encoder_state == DIR_CW) {
         turn = -1;

@@ -55,8 +55,10 @@ void graph_swr(const AnalysisPoint* results, size_t results_len, const Analyzer*
     int16_t y_screen = 8*TITLE_TEXT_SIZE*2;
     int16_t width = tft.width()-x_screen;
     int16_t height = tft.height()-y_screen-8*2;
+    tft.drawFastHLine(x_screen, y_screen, width, WHITE);
     tft.drawFastHLine(x_screen, y_screen+height, width, WHITE);
     tft.drawFastVLine(x_screen, y_screen, height, WHITE);
+    tft.drawFastVLine(x_screen+width, y_screen, height, WHITE);
 
     int16_t xy_cutoff[2];
     translate_to_screen(0, 3, 0, 1, 5, 1, x_screen, y_screen, width, height, xy_cutoff);
@@ -68,6 +70,8 @@ void graph_swr(const AnalysisPoint* results, size_t results_len, const Analyzer*
         Serial.println("no results to plot");
         return;
     }
+
+    //TODO: what do we do if none of the SWR falls into plottable region?
 
     uint32_t start_fq = results[0].fq;
     uint32_t end_fq = results[results_len-1].fq;
@@ -149,9 +153,9 @@ void graph_smith(const AnalysisPoint* results, size_t results_len, const Analyze
 
     // draw axes
     int16_t x_screen = 8*2;
-    int16_t y_screen = 8*TITLE_TEXT_SIZE*2;
+    int16_t y_screen = -(tft.width()-x_screen-tft.height())/2;//8*TITLE_TEXT_SIZE*2;
     int16_t width = tft.width()-x_screen;
-    int16_t height = tft.height()-y_screen-8*2;
+    int16_t height = width;//tft.height()-y_screen-8*2;
 
     // gamma range, x is real, y is imag
     float x_min = -1;
@@ -169,12 +173,30 @@ void graph_smith(const AnalysisPoint* results, size_t results_len, const Analyze
     //cutoff swr circles
     int16_t center[2];
     translate_to_screen(0, 0, x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, center);
+
     int16_t swr_3[2];
+    /*translate_to_screen(-0.5, 0, x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, swr_3);
+    tft.drawCircle(swr_3[0], swr_3[1], 5, RED);
+    translate_to_screen(0, 0.5, x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, swr_3);
+    tft.drawCircle(swr_3[0], swr_3[1], 5, RED);
+    translate_to_screen(0, -0.5, x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, swr_3);
+    tft.drawCircle(swr_3[0], swr_3[1], 5, RED);*/
     translate_to_screen(0.5, 0, x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, swr_3);
+    //tft.drawCircle(swr_3[0], swr_3[1], 5, RED);
+    assert(abs(compute_swr(Complex(0.5, 0))-3.0) < 0.001);
     swr_3[0] -= center[0];
     tft.drawCircle(x_screen+(width/2), y_screen+(height/2), swr_3[0], RED);
+
     int16_t swr_15[2];
+    /*translate_to_screen(-0.2, 0, x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, swr_15);
+    tft.drawCircle(swr_15[0], swr_15[1], 5, MAGENTA);
+    translate_to_screen(0.0, 0.2, x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, swr_15);
+    tft.drawCircle(swr_15[0], swr_15[1], 5, MAGENTA);
+    translate_to_screen(0.0, -0.2, x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, swr_15);
+    tft.drawCircle(swr_15[0], swr_15[1], 5, MAGENTA);*/
     translate_to_screen(0.2, 0, x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, swr_15);
+    //tft.drawCircle(swr_15[0], swr_15[1], 5, MAGENTA);
+    assert(abs(compute_swr(Complex(0.2, 0))-1.5) < 0.001);
     swr_15[0] -= center[0];
     tft.drawCircle(x_screen+width/2, y_screen+height/2, swr_15[0], MAGENTA);
 
@@ -207,9 +229,9 @@ void graph_smith(const AnalysisPoint* results, size_t results_len, const Analyze
 
 void draw_smith_pointer(const AnalysisPoint* results, size_t results_len, size_t swr_i, size_t old_swr_i, const Analyzer* analyzer) {
     int16_t x_screen = 8*2;
-    int16_t y_screen = 8*TITLE_TEXT_SIZE*2;
+    int16_t y_screen = -(tft.width()-x_screen-tft.height())/2;//8*TITLE_TEXT_SIZE*2;
     int16_t width = tft.width()-x_screen;
-    int16_t height = tft.height()-y_screen-8*2;
+    int16_t height = width;//tft.height()-y_screen-8*2;
 
     // gamma range, x is real, y is imag
     float x_min = -1;
