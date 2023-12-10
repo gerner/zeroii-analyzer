@@ -18,15 +18,19 @@
 #define BATT_SENSE_PERIOD 3000
 float vbatt = 8.0;
 uint32_t last_vbatt = 0;
-void init_vbatt() {
+
+float measure_vbatt() {
+    // experimentally calibrated using a linear transformation
     uint16_t batt_raw = analogRead(BATT_SENSE_PIN);
-    vbatt = batt_raw * 5.0 / 1023.0 * 2;
+    float vbatt = batt_raw * 0.0113 - 0.434;
+    return vbatt;
+}
+void init_vbatt() {
+    vbatt = measure_vbatt();
     last_vbatt = millis();
 }
 void update_vbatt() {
-    uint16_t batt_raw = analogRead(BATT_SENSE_PIN);
-
-    vbatt = ((1.0-VBATT_ALPHA) * vbatt) + ((VBATT_ALPHA) * (batt_raw * 5.0 / 1023.0 * 2));
+    vbatt = ((1.0-VBATT_ALPHA) * vbatt) + ((VBATT_ALPHA) * measure_vbatt());
     last_vbatt = millis();
 }
 
@@ -48,10 +52,10 @@ void update_vbatt() {
  // The control pins for the LCD can be assigned to any digital or
 // analog pins...but we'll use the analog pins as this allows us to
 // double up the pins with the touch screen (see the TFT paint example).
-#define LCD_CS 13//A3 // Chip Select goes to Analog 3
-#define LCD_CD A2 // Command/Data goes to Analog 2
-#define LCD_WR A1 // LCD Write goes to Analog 1
-#define LCD_RD A0 // LCD Read goes to Analog 0
+#define LCD_CS 1  //A3 // Chip Select goes to Analog 3
+#define LCD_CD 0 // Command/Data goes to Analog 2
+#define LCD_WR 13 // LCD Write goes to Analog 1
+#define LCD_RD 11 // LCD Read goes to Analog 0
 #define LCD_RESET -1
 
 #define TFT_ROTATION 3
@@ -88,9 +92,9 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 #define MAX_STEPS 128
 
 #define ZERO_I2C_ADDRESS 0x5B
-#define CLK 12
-#define DT 11
-#define SW 10
+#define CLK A2
+#define DT A1
+#define SW A0
 
 #define Z0 50
 
@@ -432,7 +436,13 @@ void draw_vbatt() {
     tft.fillRect(tft.width() - 6*TITLE_TEXT_SIZE*5, 0, 6*TITLE_TEXT_SIZE*5, 8*TITLE_TEXT_SIZE, BLACK);
     tft.setCursor(tft.width() - 6*TITLE_TEXT_SIZE*5, 0);
     tft.setTextSize(TITLE_TEXT_SIZE);
-    tft.print(vbatt);
+    if (vbatt >= 10) {
+        tft.print((int)vbatt);
+        tft.print(".");
+        tft.print((int)vbatt*10%10);
+    } else {
+        tft.print(vbatt);
+    }
     tft.print("v");
 }
 
@@ -962,6 +972,10 @@ void handle_serial_command() {
         Serial.print("\t");
         Serial.print(batt_raw*5.0/1023.0*2);
         Serial.print("\t");
+        Serial.print(batt_raw*analogReference()/1023.0*2);
+        Serial.print("\t");
+        Serial.print(measure_vbatt());
+        Serial.print("\t");
         Serial.println(vbatt);
     } else if(strncmp(serial_command, "aref", serial_command_len) == 0) {
         Serial.print(analogRead(AVCC_MEASURE_PIN));
@@ -975,6 +989,12 @@ void handle_serial_command() {
         Serial.println(String("unknown command of length ")+serial_command_len+": '"+buf+"'");
         free(buf);
     }
+}
+
+void prepare_SD() {
+    pinMode(SPI_MISO_PIN, INPUT);
+    pinMode(SPI_MOSI_PIN, OUTPUT);
+    pinMode(SPI_SCK_PIN, OUTPUT);
 }
 
 void setup_failed() {
@@ -992,6 +1012,9 @@ void setup() {
 
     tft.println("Initializing...");
     digitalWrite(LED_BUILTIN, 0);
+
+    pinMode(10, OUTPUT);
+    digitalWrite(10, HIGH);
 
     init_vbatt();
 
