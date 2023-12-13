@@ -1,6 +1,5 @@
 #include "RigExpertZeroII_I2C.h"
 #include "Complex.h"
-#include "MD_REncoder.h"
 
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <SPI.h>
@@ -11,9 +10,10 @@
 #include "EEPROM.h"
 #include <ArduinoJson.h>
 
+#include <SerialWombat.h>
+
 #include "analyzer.h"
 #include "menu_manager.h"
-#include "button.h"
 
 #define WAIT_FOR_SERIAL 1
 
@@ -334,12 +334,17 @@ class AnalysisProcessor {
 
 AnalysisProcessor analysis_processor;
 
-MD_REncoder encoder(CLK, DT);
-Button button(SW);
+//MD_REncoder encoder(CLK, DT);
+//Button button(SW);
 
 SdFs sd;
+SerialWombatChip sw;
+
+SerialWombatQuadEnc quad_enc(sw);
+SerialWombatDebouncedInput debounced_input(sw);
 
 int8_t turn = 0;
+uint16_t last_quad_enc = 32768;
 bool click = false;
 
 #define MOPT_ANALYZE 1
@@ -452,7 +457,7 @@ void draw_title() {
     tft.setTextSize(TITLE_TEXT_SIZE);
 
     tft.print(frequency_formatter(startFq) + " to " + frequency_formatter(endFq));
-    tft.print(" Steps: ");
+    tft.print(" St: ");
     tft.print(dotsNumber);
 }
 
@@ -532,7 +537,7 @@ int32_t set_user_value(int32_t current_value, int32_t min_value, int32_t max_val
     if (turn != 0) {
         // inc scales with how fast you're turning it
         // inc is direction * 2 ^ speed / 10
-        int32_t inc = turn * (uint32_t(1) << (uint32_t(encoder.speed()/2))) * multiplier;
+        int32_t inc = turn * multiplier;// * (uint32_t(1) << (uint32_t(encoder.speed()/2))) * multiplier;
         int32_t updated_value = constrain(current_value + inc, min_value, max_value);
         tft.setTextSize(3);
         tft.fillRect(0, 5*2*8, tft.width(), 2*8*3, BLACK);
@@ -630,7 +635,7 @@ class FqSetter {
                 if (fq_state_ != FQ_SETTING_GHZ) {
                     // inc scales with how fast you're turning it
                     // inc is direction * 2 ^ speed / 10
-                    inc = (uint32_t(1) << (uint32_t(encoder.speed()/2))) * inc;
+                    //inc = (uint32_t(1) << (uint32_t(encoder.speed()/2))) * inc;
                 } //k else just inc by 1GHz to avoid overflow
                 fq_ = constrain(fq_ + turn * inc, min_fq, max_fq);
                 draw_fq_setting(label);
@@ -854,8 +859,7 @@ void handle_option() {
                 // move the "pointer" on the swr graph
                 size_t old_swr_i = swr_i;
 
-                int32_t inc = (uint32_t(1) << (uint32_t(encoder.speed()/3)));
-                swr_i = constrain((int32_t)swr_i+inc*turn, 0, analysis_results_len-1);
+                swr_i = constrain((int32_t)swr_i+turn, 0, analysis_results_len-1);
                 assert(swr_i < analysis_results_len);
                 if (pointer_moves > POINTER_MOVES_REDRAW) {
                     graph_swr(analysis_results, analysis_results_len, &analyzer);
@@ -874,8 +878,7 @@ void handle_option() {
                 // move the "pointer" on the smith chart
                 size_t old_swr_i = swr_i;
 
-                int32_t inc = (uint32_t(1) << (uint32_t(encoder.speed()/3)));
-                swr_i = constrain((int32_t)swr_i+inc*turn, 0, analysis_results_len-1);
+                swr_i = constrain((int32_t)swr_i+turn, 0, analysis_results_len-1);
                 assert(swr_i < analysis_results_len);
                 if (pointer_moves > POINTER_MOVES_REDRAW) {
                     graph_smith(analysis_results, analysis_results_len, &analyzer);
@@ -1018,6 +1021,7 @@ void setup() {
     Serial.println("starting SD...");
     if(!sd.begin(SdSpiConfig(10, DEDICATED_SPI, SPI_HALF_SPEED))) {
         Serial.println("SD failed to begin");
+        tft.println("SD failed to start");
         setup_failed();
     }
 
@@ -1031,17 +1035,22 @@ void setup() {
     }
     Serial.println("ZEROII started.");
 
+    Serial.println("starting serial wombat...");
+    if(!sw.begin(Wire, 0x6C)) {
+        Serial.println("serial wombat failed to begin");
+        tft.println("serial wombat failed to start");
+        setup_failed();
+    }
+    quad_enc.begin(1,2, 10, false, QE_ONLOW_POLL);
+    quad_enc.read(32768);
+    debounced_input.begin(0, 30, false, false);
+    debounced_input.readTransitionsState();
+
     String str = "Version: ";
     Serial.println(str + analyzer.zeroii_.getMajorVersion() + "." + analyzer.zeroii_.getMinorVersion() +
             ", HW Revision: " + analyzer.zeroii_.getHwRevision() +
             ", SN: " + analyzer.zeroii_.getSerialNumber()
     );
-
-    Serial.println("Starting encoder/button...");
-    encoder.setPeriod(200);
-    //encoder.begin();
-    //button.begin();
-    Serial.println("Encoder/button started.");
 
     Serial.println("checking for settings...");
     uint8_t settings_header[4];
@@ -1076,17 +1085,11 @@ void loop() {
         update_vbatt();
         draw_vbatt();
     }
-    /*uint8_t encoder_state = encoder.read();
-    if (encoder_state == DIR_CW) {
-        turn = -1;
-    } else if(encoder_state == DIR_CCW) {
-        turn = 1;
-    } else {
-        turn = 0;
-    }
-    click = button.read();*/
-    turn = 0;
-    click = false;
+
+    debounced_input.readTransitionsState();
+    click = debounced_input.transitions > 0 && !debounced_input.digitalRead();
+    uint16_t next_quad_enc = quad_enc.read(32768);
+    turn = next_quad_enc - last_quad_enc;
 
     if(read_serial_command()) {
         handle_serial_command();
@@ -1095,6 +1098,7 @@ void loop() {
 
     handle_option();
     // TODO: if we're in a measurement, allow cancelling it by clicking
+    //delay(50);
 }
 
 void analyze_frequency(uint32_t fq) {
