@@ -11,3 +11,6 @@ all: build/build_flag
 
 upload: all
 	arduino-cli upload zeroii-analyzer -p /dev/ttyACM0 --fqbn $(FQBN)
+
+clean:
+	rm build/build_flag

@@ -4,14 +4,18 @@
 
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <SPI.h>
+#include <SdFat.h>
 #include "Adafruit_TFTLCD.h"
 #include "TouchScreen.h"
 
 #include "EEPROM.h"
+#include <ArduinoJson.h>
 
 #include "analyzer.h"
 #include "menu_manager.h"
 #include "button.h"
+
+#define WAIT_FOR_SERIAL 1
 
 #define VBATT_ALPHA 0.05
 #define BATT_SENSE_PIN A3
@@ -34,7 +38,25 @@ void update_vbatt() {
     last_vbatt = millis();
 }
 
-// These are the four touchscreen analog pins
+// These are the four touchscreen analog pin
+#define YP A2  // must be an analog pin, use "An" notation!
+#define XM A3  // must be an analog pin, use "An" notation!
+#define YM 7   // can be a digital pin
+#define XP 8   // can be a digital pin
+
+// This is calibration data for the raw touch data to the screen coordinates
+#define TS_MINX 110
+#define TS_MINY 80
+#define TS_MAXX 900
+#define TS_MAXY 940
+
+#define MINPRESSURE 10
+#define MAXPRESSURE 1000
+
+ // The control pins for the LCD can be assigned to any digital or
+// analog pins...but we'll use the analog pins as this allows us to
+// double up the pins with the touch screen (see the TFT paint example).
+#define LCD_CS 1  s
 #define YP A2  // must be an analog pin, use "An" notation!
 #define XM A3  // must be an analog pin, use "An" notation!
 #define YM 7   // can be a digital pin
@@ -54,8 +76,8 @@ void update_vbatt() {
 // double up the pins with the touch screen (see the TFT paint example).
 #define LCD_CS 1  //A3 // Chip Select goes to Analog 3
 #define LCD_CD 0 // Command/Data goes to Analog 2
-#define LCD_WR 13 // LCD Write goes to Analog 1
-#define LCD_RD 11 // LCD Read goes to Analog 0
+#define LCD_WR A1 // LCD Write goes to Analog 1
+#define LCD_RD A0 // LCD Read goes to Analog 0
 #define LCD_RESET -1
 
 #define TFT_ROTATION 3
@@ -93,8 +115,8 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 
 #define ZERO_I2C_ADDRESS 0x5B
 #define CLK A2
-#define DT A1
-#define SW A0
+#define DT A4
+#define SW A5
 
 #define Z0 50
 
@@ -314,6 +336,8 @@ AnalysisProcessor analysis_processor;
 
 MD_REncoder encoder(CLK, DT);
 Button button(SW);
+
+SdFs sd;
 
 int8_t turn = 0;
 bool click = false;
@@ -897,110 +921,68 @@ void handle_option() {
     }
 }
 
-#define MAX_SERIAL_COMMAND 128
-char serial_command[MAX_SERIAL_COMMAND];
-size_t serial_command_len = 0;
-bool read_serial_command() {
-    int c;
-    while(serial_command_len < MAX_SERIAL_COMMAND && ((c = Serial.read()) > 0)) {
-        if(c == '\n') {
-            return true;
-        }
-        serial_command[serial_command_len++] = c;
-    }
-    if(serial_command_len == MAX_SERIAL_COMMAND) {
-        serial_command_len = 0;
-    }
-    return false;
-}
-
-int str2int(const char* str, int len)
+int digitalReadOutputPin(uint8_t pin)
 {
-    int i;
-    int ret = 0;
-    for(i = 0; i < len; ++i)
-    {
-        if(str[i] < '0' || str [i] > '9') {
-            return ret;
-        } else {
-            ret = ret * 10 + (str[i] - '0');
-        }
-    }
-    return ret;
+  uint8_t bit = digitalPinToBitMask(pin);
+  uint8_t port = digitalPinToPort(pin);
+  //if (port == NOT_A_PIN)
+  //  return LOW;
+
+  return (*portOutputRegister(port) & bit) ? HIGH : LOW;
 }
 
-void handle_serial_command() {
-    if(serial_command_len == 0) {
-        return;
-    }
-    if(strncmp(serial_command, "reset", serial_command_len) == 0) {
-        Serial.println("resetting");
-        NVIC_SystemReset();
-    } else if(strncmp(serial_command, "eeprom ", min(serial_command_len, 7)) == 0) {
-        int idx = str2int(serial_command+7, serial_command_len-7);
-        Serial.println(String("eeprom idx\t")+idx+":\t0x"+String(EEPROM.read(idx), HEX));
-    } else if(strncmp(serial_command, "result ", min(serial_command_len, 7)) == 0) {
-        int idx = str2int(serial_command+7, serial_command_len-7);
-        if(idx >= analysis_results_len) {
-            Serial.println(String("idx ")+idx+" >= "+analysis_results_len);
-        } else {
-            Serial.println(String("result idx\t")+idx);
-            Serial.print("Raw:\t");
-            Serial.println(analysis_results[idx].uncal_z);
-            Serial.print("Uncal gamma:\t");
-            Serial.println(compute_gamma(analysis_results[idx].uncal_z, 50));
-            Serial.print("Cal gamma:\t");
-            Serial.println(analyzer.calibrated_gamma(analysis_results[idx].uncal_z));
-            Serial.print("SWR:\t");
-            Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[idx].uncal_z)));
-        }
-    } else if(strncmp(serial_command, "results", serial_command_len) == 0) {
-        for (size_t i=0; i<analysis_results_len; i++) {
-            Serial.print(analysis_results[i].fq);
-            Serial.print("\t");
-            Serial.print(analysis_results[i].uncal_z);
-            Serial.print("\t");
-            Serial.print(compute_gamma(analysis_results[i].uncal_z, 50));
-            Serial.print("\t");
-            Serial.print(analyzer.calibrated_gamma(analysis_results[i].uncal_z));
-            Serial.print("\t");
-            Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[i].uncal_z)));
-        }
-    } else if(strncmp(serial_command, "batt", serial_command_len) == 0) {
-        uint16_t batt_raw = analogRead(A3);
-        Serial.print(batt_raw);
-        Serial.print("\t");
-        Serial.print(batt_raw*5.0/1023.0*2);
-        Serial.print("\t");
-        Serial.print(batt_raw*analogReference()/1023.0*2);
-        Serial.print("\t");
-        Serial.print(measure_vbatt());
-        Serial.print("\t");
-        Serial.println(vbatt);
-    } else if(strncmp(serial_command, "aref", serial_command_len) == 0) {
-        Serial.print(analogRead(AVCC_MEASURE_PIN));
-        Serial.print("\t");
-        Serial.print(analogReference());
-        Serial.print("\n");
-    } else {
-        char* buf = (char*)malloc(serial_command_len+1);
-        memcpy(buf, serial_command, serial_command_len);
-        buf[serial_command_len] = 0;
-        Serial.println(String("unknown command of length ")+serial_command_len+": '"+buf+"'");
-        free(buf);
-    }
+#define UNKNOWN_PIN 0xFF
+
+uint8_t getPinMode(uint8_t pin)
+{
+  uint16_t bit = digitalPinToBitMask(pin);
+  uint16_t port = digitalPinToPort(pin);
+
+  // I don't see an option for mega to return this, but whatever...
+  //if (NOT_A_PIN == port) return UNKNOWN_PIN;
+
+  // Is there a bit we can check?
+  if (0 == bit) return UNKNOWN_PIN;
+
+  // Is there only a single bit set?
+  if (bit & bit - 1) return UNKNOWN_PIN;
+
+  volatile uint16_t *reg, *out;
+  reg = portModeRegister(port);
+  out = portOutputRegister(port);
+
+  if (*reg & bit)
+    return OUTPUT;
+  else if (*out & bit)
+    return INPUT_PULLUP;
+  else
+    return INPUT;
 }
 
-void prepare_SD() {
-    pinMode(SPI_MISO_PIN, INPUT);
-    pinMode(SPI_MOSI_PIN, OUTPUT);
-    pinMode(SPI_SCK_PIN, OUTPUT);
+void setPinInput(uint8_t pin)
+{
+  uint16_t bit = digitalPinToBitMask(pin);
+  uint16_t port = digitalPinToPort(pin);
+  volatile uint16_t *reg;
+  reg = portModeRegister(port);
+  *reg &= ~bit;
 }
+
+void setPinOutput(uint8_t pin)
+{
+  uint16_t bit = digitalPinToBitMask(pin);
+  uint16_t port = digitalPinToPort(pin);
+  volatile uint16_t *reg;
+  reg = portModeRegister(port);
+  *reg |= bit;
+}
+
+//TODO: refactor things so we don't have to include shell.h here
+#include "shell.h"
 
 void setup_failed() {
     int led_state = 0;
     while(1) {
-        digitalWrite(LED_BUILTIN, led_state);
         delay(1000);
         led_state = !led_state;
     }
@@ -1010,16 +992,21 @@ void setup() {
     Serial.begin(38400);
     Serial.flush();
 
-    tft.println("Initializing...");
-    digitalWrite(LED_BUILTIN, 0);
-
-    pinMode(10, OUTPUT);
-    digitalWrite(10, HIGH);
+    if (WAIT_FOR_SERIAL) {
+        wait_for_serial();
+    }
 
     init_vbatt();
 
     Serial.println("starting TFT...");
-    tft.begin(tft.readID());
+
+    uint16_t tft_id = tft.readID();
+    if (tft_id != 0x8357) {
+        Serial.print("got unexpected tft id 0x");
+        Serial.println(tft_id, HEX);
+        setup_failed();
+    }
+    tft.begin(tft_id);
     tft.fillScreen(BLACK);
     tft.setRotation(TFT_ROTATION);
     tft.setCursor(0, 0);
@@ -1027,6 +1014,12 @@ void setup() {
     tft.setTextSize(2);
     Serial.println("TFT started.");
     tft.println("Initializing...");
+
+    Serial.println("starting SD...");
+    if(!sd.begin(SdSpiConfig(10, DEDICATED_SPI, SPI_HALF_SPEED))) {
+        Serial.println("SD failed to begin");
+        setup_failed();
+    }
 
     Serial.println("starting ZEROII...");
     tft.println("Starting ZEROII...");
@@ -1046,8 +1039,8 @@ void setup() {
 
     Serial.println("Starting encoder/button...");
     encoder.setPeriod(200);
-    encoder.begin();
-    button.begin();
+    //encoder.begin();
+    //button.begin();
     Serial.println("Encoder/button started.");
 
     Serial.println("checking for settings...");
@@ -1083,7 +1076,7 @@ void loop() {
         update_vbatt();
         draw_vbatt();
     }
-    uint8_t encoder_state = encoder.read();
+    /*uint8_t encoder_state = encoder.read();
     if (encoder_state == DIR_CW) {
         turn = -1;
     } else if(encoder_state == DIR_CCW) {
@@ -1091,7 +1084,9 @@ void loop() {
     } else {
         turn = 0;
     }
-    click = button.read();
+    click = button.read();*/
+    turn = 0;
+    click = false;
 
     if(read_serial_command()) {
         handle_serial_command();
