@@ -3,7 +3,7 @@
 
 #include "Complex.h"
 
-Complex compute_gamma(Complex z, float z0_real) {
+Complex compute_gamma(const Complex z, const float z0_real) {
     // gamma = (z - z0) / (z + z0)
     // z = r + xj
 
@@ -12,7 +12,7 @@ Complex compute_gamma(Complex z, float z0_real) {
     return (z - z0) / (z + z0);
 }
 
-Complex compute_z(Complex gamma, float z0_real) {
+Complex compute_z(const Complex gamma, const float z0_real) {
     Complex z0(z0_real);
     return z0*((one+gamma) / (one-gamma));
 }

@@ -89,12 +89,14 @@ void update_vbatt() {
 #define MAGENTA 0xF81F
 #define YELLOW  0xFFE0
 #define WHITE   0xFFFF
+#define GRAY    0xBDF7
 
 //Adafruit_HX8357 tft = Adafruit_HX8357(TFT_CS, TFT_DC, TFT_RST);
 Adafruit_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
 
 // Some display configs
 #define TITLE_TEXT_SIZE 2
+#define LABEL_TEXT_SIZE 1
 #define MENU_TEXT_SIZE 2
 #define MENU_ORIG_X 0
 #define MENU_ORIG_Y TITLE_TEXT_SIZE*8*2
@@ -596,19 +598,17 @@ void enter_option(int32_t option_id) {
         case MOPT_FQBAND: band_setter.initialize(); break;
         case MOPT_CALIBRATE: calibrator.initialize((endFq-startFq)/2); break;
         case MOPT_SWR: {
-            pointer_moves = 0;
             swr_i = 0;
             graph_swr(analysis_results, analysis_results_len, &analyzer);
-            draw_swr_pointer(analysis_results, analysis_results_len, swr_i, swr_i, &analyzer);
+            draw_swr_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
             draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             break;
         }
         case MOPT_SMITH: {
-            pointer_moves = 0;
             swr_i = 0;
             graph_smith(analysis_results, analysis_results_len, &analyzer);
-            draw_smith_pointer(analysis_results, analysis_results_len, swr_i, swr_i, &analyzer);
-            draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+            draw_smith_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
+            draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             break;
         }
     }
@@ -721,17 +721,9 @@ void handle_option() {
                 menu_back();
             } else if (turn != 0) {
                 // move the "pointer" on the swr graph
-                size_t old_swr_i = swr_i;
-
                 swr_i = constrain((int32_t)swr_i+turn, 0, analysis_results_len-1);
                 assert(swr_i < analysis_results_len);
-                if (pointer_moves > POINTER_MOVES_REDRAW) {
-                    graph_swr(analysis_results, analysis_results_len, &analyzer);
-                    pointer_moves = 0;
-                } else {
-                    pointer_moves++;
-                }
-                draw_swr_pointer(analysis_results, analysis_results_len, swr_i, old_swr_i, &analyzer);
+                draw_swr_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
                 draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             }
             break;
@@ -740,18 +732,10 @@ void handle_option() {
                 menu_back();
             } else if (turn != 0) {
                 // move the "pointer" on the smith chart
-                size_t old_swr_i = swr_i;
-
                 swr_i = constrain((int32_t)swr_i+turn, 0, analysis_results_len-1);
                 assert(swr_i < analysis_results_len);
-                if (pointer_moves > POINTER_MOVES_REDRAW) {
-                    graph_smith(analysis_results, analysis_results_len, &analyzer);
-                    pointer_moves = 0;
-                } else {
-                    pointer_moves++;
-                }
-                draw_smith_pointer(analysis_results, analysis_results_len, swr_i, old_swr_i, &analyzer);
-                draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+                draw_smith_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
+                draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             }
             break;
         case MOPT_FQCENTER:

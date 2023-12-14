@@ -31,17 +31,20 @@ void wait_for_serial() {
     }
 }
 
-int str2int(const char* str, int len)
+int str2int(const char* str, int len, char** ptr=NULL)
 {
     int i;
     int ret = 0;
     for(i = 0; i < len; ++i)
     {
         if(str[i] < '0' || str [i] > '9') {
-            return ret;
+            break;
         } else {
             ret = ret * 10 + (str[i] - '0');
         }
+    }
+    if(ptr) {
+        *ptr = (char *)((void *)str+i);
     }
     return ret;
 }
@@ -146,59 +149,6 @@ void shellfn_aref(const char* serial_command, size_t serial_command_len) {
     Serial.print("\t");
     Serial.print(analogReference());
     Serial.print("\n");
-}
-
-void shellfn_load_settings(const char* serial_command, size_t serial_command_len) {
-    Serial.println("loading settings from file...");
-    uint32_t start_time = millis();
-    FsFile settings_file;
-    if(!settings_file.open("settings.json")) {
-        Serial.println("could not open settings.json");
-    } else {
-        DynamicJsonDocument settings_doc(8192);
-        deserializeJson(settings_doc, settings_file);
-        settings_file.close();
-        if (!settings_doc.containsKey("version") || settings_doc["version"] != 1) {
-            Serial.println("version not found or bad value");
-        } else {
-            Serial.println("settings look ok");
-        }
-    }
-    Serial.println(String("loaded settings in ")+(millis()-start_time)+"ms");
-}
-
-void shellfn_load_results(const char* serial_command, size_t serial_command_len) {
-    Serial.println("loading results from file...");
-    uint32_t start_time = millis();
-    FsFile results_file;
-    if(!results_file.open("results.json")) {
-        Serial.println("could not open results.json");
-    } else {
-        DynamicJsonDocument results_doc(8192);
-        deserializeJson(results_doc, results_file);
-        results_file.close();
-
-        Serial.print("results list of size ");
-        Serial.println(results_doc.size());
-        for (size_t i=0; i<results_doc.size(); i++) {
-            uint32_t fq = results_doc[i]["fq"];
-            Complex uncal_z(results_doc[i]["uncal_z"][0], results_doc[i]["uncal_z"][1]);
-
-            Serial.print(fq);
-            Serial.print("\t");
-            Serial.print(uncal_z);
-            Serial.print("\n");
-        }
-    }
-    Serial.println(String("loaded results in ")+(millis()-start_time)+"ms");
-}
-
-void shellfn_clear_settings(const char* serial_command, size_t serial_command_len) {
-    Serial.println("TBD");
-}
-
-void shellfn_clear_results(const char* serial_command, size_t serial_command_len) {
-    Serial.println("TBD");
 }
 
 void shellfn_dir(const char* serial_command, size_t serial_command_len) {
@@ -308,6 +258,39 @@ void shellfn_cat(const char* serial_command, size_t serial_command_len) {
     target.close();
 }
 
+void shellfn_pixel(const char* serial_command, size_t serial_command_len) {
+    //pixel x y [color]
+    //without color, print the color of pixel x y
+    //with color set pixel x y to color
+
+    char* ptr;
+    ptr = strchr(serial_command, ' ');
+    if (!ptr) {
+        Serial.println("usage: pixel x y [color]");
+        return;
+    }
+    int x = str2int(ptr+1, serial_command_len-(serial_command-ptr)-1, &ptr);
+    ptr = strchr(ptr, ' ');
+    if (!ptr) {
+        Serial.println("usage: pixel x y [color]");
+        return;
+    }
+    int y = str2int(ptr+1, serial_command_len-(serial_command-ptr)-1, &ptr);
+    if (ptr < serial_command+serial_command_len) {
+        ptr = strchr(ptr, ' ');
+        if (!ptr) {
+            Serial.println("usage: pixel x y [color]");
+            return;
+        }
+        int color = str2int(ptr+1, serial_command_len-(serial_command-ptr)-1, &ptr);
+        Serial.println(String("drawing pixel at ")+x+","+y+" "+color);
+        tft.drawPixel(x, y, color);
+    } else {
+        Serial.println(String("reading at ")+x+","+y);
+        Serial.println(tft.readPixel(x, y));
+    }
+}
+
 const char* SHELL_COMMANDS[] = {
     "help",
     "reset",
@@ -316,15 +299,12 @@ const char* SHELL_COMMANDS[] = {
     "results",
     "batt",
     "aref",
-    "load_settings",
-    "load_results",
-    "clear_settings",
-    "clear_results",
     "dir",
     "df",
     "rm",
     "touch",
-    "cat"
+    "cat",
+    "pixel"
 };
 
 void shellfn_help(const char* serial_command, size_t serial_command_len) {
@@ -344,15 +324,12 @@ const shell_command_t SHELL_FUNCTIONS[] = {
     shellfn_results,
     shellfn_batt,
     shellfn_aref,
-    shellfn_load_settings,
-    shellfn_load_results,
-    shellfn_clear_settings,
-    shellfn_clear_results,
     shellfn_dir,
     shellfn_df,
     shellfn_rm,
     shellfn_touch,
-    shellfn_cat
+    shellfn_cat,
+    shellfn_pixel
 };
 
 void handle_serial_command() {
