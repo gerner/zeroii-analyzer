@@ -2,18 +2,18 @@
 #include "Complex.h"
 
 #include <Adafruit_GFX.h>    // Core graphics library
-#include <SPI.h>
-#include <SdFat.h>
 #include "Adafruit_TFTLCD.h"
 #include "TouchScreen.h"
 
-#include "EEPROM.h"
+#include <SPI.h>
+#include <SdFat.h>
 #include <ArduinoJson.h>
 
 #include <SerialWombat.h>
 
 #include "analyzer.h"
 #include "menu_manager.h"
+#include "persistence.h"
 
 #define WAIT_FOR_SERIAL 1
 
@@ -130,6 +130,8 @@ Analyzer analyzer(Z0);
 size_t analysis_results_len = 0;
 AnalysisPoint analysis_results[MAX_STEPS];
 
+AnalyzerPersistence persistence;
+
 void initialize_progress_meter(String label) {
     tft.fillRect(PROGRESS_METER_X, PROGRESS_METER_Y, PROGRESS_METER_WIDTH, 8*2*2, BLACK);
     tft.setTextSize(2);
@@ -147,150 +149,9 @@ void draw_progress_meter(size_t total, size_t current) {
     tft.print(total);
 }
 
-// magic bytes to indicate we've got saved settings
-// also encodes the settings version number
-const uint8_t MAGIC_BYTES[4] = {0xFB, 0xAD, 0x00, 0x01};
-const size_t MAGIC_BYTES_IDX = 0;
-const size_t SETTINGS_IDX = MAGIC_BYTES_IDX + sizeof(MAGIC_BYTES);
-const size_t RESULTS_IDX = SETTINGS_IDX + Analyzer::data_size;
-
-void write_to_eeprom(size_t idx, const uint8_t* data, size_t sz) {
-    for(size_t i; i<sz; i++) {
-        EEPROM.write(idx+i, data[i]);
-    }
-}
-
-void read_from_eeprom(size_t idx, uint8_t* data, size_t sz) {
-    for(size_t i; i<sz; i++) {
-        data[i] = EEPROM.read(idx+i);
-    }
-}
-
-size_t save_magic_bytes(size_t idx=MAGIC_BYTES_IDX) {
-    write_to_eeprom(idx, MAGIC_BYTES, sizeof(MAGIC_BYTES));
-}
-
-size_t save_settings(size_t idx=SETTINGS_IDX) {
-    uint8_t analyzer_data[Analyzer::data_size];
-    analyzer.save_settings(analyzer_data);
-    write_to_eeprom(idx, analyzer_data, Analyzer::data_size);
-    return Analyzer::data_size;
-}
-
-size_t save_results_len(size_t idx=RESULTS_IDX) {
-    if (EEPROM.length() < idx+analysis_results_len*AnalysisPoint::data_size+sizeof(analysis_results_len)) {
-        // skip writing the results since we can't save them all
-        // assume we at least have enough to write a zero
-        size_t zero = 0;
-        write_to_eeprom(idx, (uint8_t*)&zero, sizeof(zero));
-        return sizeof(zero);
-    }
-
-    write_to_eeprom(idx, (uint8_t*)&analysis_results_len, sizeof(analysis_results_len));
-    return sizeof(analysis_results_len);
-}
-
-size_t save_result(size_t i, size_t idx=RESULTS_IDX) {
-    if (EEPROM.length() < idx+analysis_results_len*AnalysisPoint::data_size+sizeof(analysis_results_len)) {
-        return 0;
-    }
-
-    uint8_t result_data[AnalysisPoint::data_size];
-
-    AnalysisPoint::to_bytes(analysis_results[i], result_data);
-    write_to_eeprom(idx+sizeof(analysis_results_len)+i*AnalysisPoint::data_size, result_data, AnalysisPoint::data_size);
-
-    return AnalysisPoint::data_size;
-}
-
-size_t save_results(size_t idx=RESULTS_IDX) {
-    if (EEPROM.length() < idx+analysis_results_len*AnalysisPoint::data_size+sizeof(analysis_results_len)) {
-        // skip writing the results since we can't save them all
-        // assume we at least have enough to write a zero
-        size_t zero = 0;
-        write_to_eeprom(idx, (uint8_t*)&zero, sizeof(zero));
-        return sizeof(zero);
-    }
-    write_to_eeprom(idx, (uint8_t*)&analysis_results_len, sizeof(analysis_results_len));
-    idx += sizeof(analysis_results_len);
-
-    uint8_t result_data[AnalysisPoint::data_size];
-    for(size_t i=0; i<analysis_results_len; i++, idx+=AnalysisPoint::data_size) {
-        AnalysisPoint::to_bytes(analysis_results[i], result_data);
-        write_to_eeprom(idx, result_data, AnalysisPoint::data_size);
-    }
-
-    return sizeof(analysis_results_len) + analysis_results_len*AnalysisPoint::data_size;
-}
-
-size_t load_settings(size_t idx=SETTINGS_IDX) {
-    //load analyzer settings
-    uint8_t analyzer_data[Analyzer::data_size];
-    for(size_t i=0; i<Analyzer::data_size; i++) {
-        analyzer_data[i] = EEPROM.read(idx+i);
-    }
-    analyzer.load_settings(analyzer_data);
-    return Analyzer::data_size;
-}
-
-size_t load_results(size_t idx=RESULTS_IDX) {
-    //load analysis results
-    size_t num_results;
-    read_from_eeprom(idx, (uint8_t*)&num_results, sizeof(size_t));
-    idx += sizeof(size_t);
-    analysis_results_len = num_results;
-
-    uint8_t result_data[AnalysisPoint::data_size];
-    for(size_t i=0; i<num_results; i++, idx+=AnalysisPoint::data_size) {
-        read_from_eeprom(idx, result_data, AnalysisPoint::data_size);
-        analysis_results[i] = AnalysisPoint::from_bytes(result_data);
-    }
-    return sizeof(size_t) + num_results*AnalysisPoint::data_size;
-}
-
-class ResultSaver {
-    public:
-    void initialize(AnalysisPoint* results, size_t results_len) {
-        Serial.println("Saving results...");
-        results_ = results;
-        result_idx_ = 0;
-        results_len_ = results_len;
-
-        save_results_len();
-
-        tft.fillScreen(BLACK);
-        draw_title();
-        initialize_progress_meter("Saving results...");
-    }
-
-    bool save() {
-        if (result_idx_ >= results_len_) {
-            return true;
-        }
-
-        // save one result
-        save_result(result_idx_);
-        result_idx_ ++;
-
-        // update progress meter
-        draw_progress_meter(results_len_, result_idx_);
-
-        return false;
-    }
-
-    private:
-    AnalysisPoint* results_;
-    size_t result_idx_;
-    size_t results_len_;
-};
-
-ResultSaver result_saver;
-
-enum ANALYSIS_STATE { ANALYZE, SAVE_RESULTS };
 class AnalysisProcessor {
     public:
     void initialize(uint32_t start_fq, uint32_t end_fq, uint16_t steps, AnalysisPoint* results) {
-        state_ = ANALYZE;
         fq_ = start_fq;
         steps_ = steps;
         step_fq_ = (end_fq - start_fq)/steps;
@@ -324,7 +185,6 @@ class AnalysisProcessor {
 
 
     private:
-    uint8_t state_;
     uint32_t fq_;
     uint32_t step_fq_;
     AnalysisPoint* results_;
@@ -462,6 +322,10 @@ void draw_title() {
 }
 
 void draw_vbatt() {
+    if (vbatt >= 100 || vbatt < 0) {
+        //something weird is going on
+        return;
+    }
     tft.fillRect(tft.width() - 6*TITLE_TEXT_SIZE*5, 0, 6*TITLE_TEXT_SIZE*5, 8*TITLE_TEXT_SIZE, BLACK);
     tft.setCursor(tft.width() - 6*TITLE_TEXT_SIZE*5, 0);
     tft.setTextSize(TITLE_TEXT_SIZE);
@@ -669,7 +533,7 @@ class BandSetter {
         if (click) {
             return true;
         } else if (turn != 0) {
-            band_idx_ = constrain(band_idx_+turn, 0, sizeof(band_names));
+            band_idx_ = constrain(band_idx_+turn, 0, sizeof(band_names)/sizeof(band_names[0]));
             draw_band_setting();
         }
         return false;
@@ -716,7 +580,6 @@ void enter_option(int32_t option_id) {
             analysis_processor.initialize(startFq, endFq, dotsNumber, analysis_results);
             break;
         case MOPT_SAVE_RESULTS:
-            result_saver.initialize(analysis_results, analysis_results_len);
             break;
         case MOPT_FQCENTER: {
             int32_t centerFq = startFq + (endFq-startFq)/2;
@@ -848,9 +711,10 @@ void handle_option() {
             }
             break;
         case MOPT_SAVE_RESULTS:
-            if (result_saver.save()) {
-                menu_back();
+            if(!persistence.save_results(analysis_results, analysis_results_len)) {
+                Serial.println("could not save results");
             }
+            menu_back();
             break;
         case MOPT_SWR:
             if (click) {
@@ -914,7 +778,9 @@ void handle_option() {
         case MOPT_CALIBRATE: {
             uint8_t calibration_state = calibrator.calibration_step();
             if (calibration_state == CAL_END) {
-                save_settings();
+                if(!persistence.save_settings(&analyzer)) {
+                    Serial.println("could not save settings");
+                }
                 menu_back();
             }
             break;
@@ -1053,23 +919,20 @@ void setup() {
     );
 
     Serial.println("checking for settings...");
-    uint8_t settings_header[4];
-    settings_header[0] = EEPROM.read(0);
-    settings_header[1] = EEPROM.read(1);
-    settings_header[2] = EEPROM.read(2);
-    settings_header[3] = EEPROM.read(3);
-    if(memcmp(settings_header, MAGIC_BYTES, sizeof(MAGIC_BYTES)) == 0) {
-        Serial.println("loading settings...");
-        tft.println("Loading saved settings...");
-        load_settings();
-        load_results();
-        Serial.println("settings loaded.");
+    if(!persistence.begin()) {
+        Serial.println("persistence failed to begin");
+        tft.println("persistence failed to start");
+        setup_failed();
+    }
+    if(!persistence.load_settings(&analyzer)) {
+        Serial.println("could not load existing settings");
     } else {
-        // initialize saved state
-        save_magic_bytes();
-        save_settings();
-        save_results();
-        Serial.println("header didn't match, skipping settings");
+        Serial.println("loaded settings");
+    }
+    if(!persistence.load_results(analysis_results, &analysis_results_len, MAX_STEPS)) {
+        Serial.println("could not load existing results");
+    } else {
+        Serial.println("loaded results");
     }
 
     Serial.println("Initialization complete.");

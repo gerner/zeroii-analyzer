@@ -95,32 +95,6 @@ class Analyzer {
 
         RigExpertZeroII_I2C zeroii_;
 
-        static const size_t data_size = sizeof(float) + sizeof(Complex)*3;
-
-        void load_settings(const uint8_t* data) {
-            z0_ = *(float*)data;
-            cal_short_ = *(Complex*)(data+sizeof(float));
-            cal_open_ = *(Complex*)(data+sizeof(float)+sizeof(Complex));
-            cal_load_ = *(Complex*)(data+sizeof(float)+sizeof(Complex)*2);
-
-            Serial.print("z0: ");
-            Serial.println(z0_);
-            Serial.print("cal_short: ");
-            Serial.println(cal_short_);
-            Serial.print("cal_open: ");
-            Serial.println(cal_open_);
-            Serial.print("cal_load: ");
-            Serial.println(cal_load_);
-        }
-
-        void save_settings(uint8_t* data) {
-            *(float*)data = z0_;
-            *(Complex*)(data+sizeof(float)) = cal_short_;
-            *(Complex*)(data+sizeof(float)+sizeof(Complex)) = cal_open_;
-            *(Complex*)(data+sizeof(float)+sizeof(Complex)*2) = cal_load_;
-        }
-
-    private:
         float z0_;
         Complex cal_short_;
         Complex cal_open_;
