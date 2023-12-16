@@ -4,6 +4,7 @@
 #include <ctime>
 #include <EEPROM.h>
 
+#include <RTClib.h>
 #include <SdFat.h>
 #include <ArduinoJson.h>
 
@@ -291,6 +292,39 @@ void shellfn_pixel(const char* serial_command, size_t serial_command_len) {
     }
 }
 
+void shellfn_date(const char* serial_command, size_t serial_command_len) {
+    if(serial_command_len == 4) {
+        DateTime now = rtc.now();
+        Serial.print(now.year(), DEC);
+        Serial.print('-');
+        Serial.print(now.month(), DEC);
+        Serial.print('-');
+        Serial.print(now.day(), DEC);
+        Serial.print('T');
+        Serial.print(now.hour(), DEC);
+        Serial.print(':');
+        Serial.print(now.minute(), DEC);
+        Serial.print(':');
+        Serial.print(now.second(), DEC);
+        Serial.print('Z');
+        Serial.print("\t");
+        Serial.print(rtc.getTemperature());
+        Serial.print("C");
+        Serial.println();
+    } else {
+        char* ptr = strchr(serial_command, ' ');
+        if(ptr && ptr - serial_command < serial_command_len) {
+            ptr++;
+            //assume ptr is 8601
+            DateTime new_now(ptr);
+            rtc.adjust(new_now);
+            Serial.println("set time");
+        } else {
+            Serial.println("expected iso8601 datetime");
+        }
+    }
+}
+
 const char* SHELL_COMMANDS[] = {
     "help",
     "reset",
@@ -304,7 +338,8 @@ const char* SHELL_COMMANDS[] = {
     "rm",
     "touch",
     "cat",
-    "pixel"
+    "pixel",
+    "date"
 };
 
 void shellfn_help(const char* serial_command, size_t serial_command_len) {
@@ -329,7 +364,8 @@ const shell_command_t SHELL_FUNCTIONS[] = {
     shellfn_rm,
     shellfn_touch,
     shellfn_cat,
-    shellfn_pixel
+    shellfn_pixel,
+    shellfn_date
 };
 
 void handle_serial_command() {

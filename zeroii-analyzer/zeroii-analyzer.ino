@@ -9,6 +9,8 @@
 #include <SdFat.h>
 #include <ArduinoJson.h>
 
+#include "RTClib.h"
+
 #include <SerialWombat.h>
 
 #include "analyzer.h"
@@ -53,10 +55,6 @@ void update_vbatt() {
 #define MINPRESSURE 10
 #define MAXPRESSURE 1000
 
- // The control pins for the LCD can be assigned to any digital or
-// analog pins...but we'll use the analog pins as this allows us to
-// double up the pins with the touch screen (see the TFT paint example).
-#define LCD_CS 1  s
 #define YP A2  // must be an analog pin, use "An" notation!
 #define XM A3  // must be an analog pin, use "An" notation!
 #define YM 7   // can be a digital pin
@@ -196,8 +194,7 @@ class AnalysisProcessor {
 
 AnalysisProcessor analysis_processor;
 
-//MD_REncoder encoder(CLK, DT);
-//Button button(SW);
+RTC_DS3231 rtc;
 
 SdFs sd;
 SerialWombatChip sw;
@@ -868,7 +865,22 @@ void setup() {
     Serial.println("TFT started.");
     tft.println("Initializing...");
 
+    Serial.println("starting RTC...");
+    tft.println("starting RTC...");
+    if (!rtc.begin()) {
+        Serial.println("RTC failed to begin");
+        tft.println("RTC failed to begin");
+        setup_failed();
+    }
+
+    if (rtc.lostPower()) {
+        Serial.println("RTC lost power, let's set the time!");
+        // following line sets the RTC to the date & time this sketch was compiled
+        rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    }
+
     Serial.println("starting SD...");
+    tft.println("starting SD...");
     if(!sd.begin(SdSpiConfig(10, DEDICATED_SPI, SPI_HALF_SPEED))) {
         Serial.println("SD failed to begin");
         tft.println("SD failed to start");
@@ -883,6 +895,11 @@ void setup() {
         setup_failed();
         return;
     }
+    String str = "Version: ";
+    Serial.println(str + analyzer.zeroii_.getMajorVersion() + "." + analyzer.zeroii_.getMinorVersion() +
+            ", HW Revision: " + analyzer.zeroii_.getHwRevision() +
+            ", SN: " + analyzer.zeroii_.getSerialNumber()
+    );
     Serial.println("ZEROII started.");
 
     Serial.println("starting serial wombat...");
@@ -891,16 +908,15 @@ void setup() {
         tft.println("serial wombat failed to start");
         setup_failed();
     }
-    quad_enc.begin(1,2, 10, false, QE_ONLOW_POLL);
+    uint32_t sw_version = sw.readVersion_uint32();
+    if (sw_version == 0) {
+        Serial.println(String("serial wombat version was bad: ")+sw_version);
+    }
+    Serial.println(String("serial wombat version: ")+sw_version+" '"+sw.readVersion()+"'");
+    quad_enc.begin(2, 1, 10, false, QE_ONLOW_POLL);
     quad_enc.read(32768);
     debounced_input.begin(0, 30, false, false);
     debounced_input.readTransitionsState();
-
-    String str = "Version: ";
-    Serial.println(str + analyzer.zeroii_.getMajorVersion() + "." + analyzer.zeroii_.getMinorVersion() +
-            ", HW Revision: " + analyzer.zeroii_.getHwRevision() +
-            ", SN: " + analyzer.zeroii_.getSerialNumber()
-    );
 
     Serial.println("checking for settings...");
     if(!persistence.begin()) {
