@@ -253,8 +253,8 @@ void graph_smith(const AnalysisPoint* results, size_t results_len, const Analyze
     tft.setTextColor(GRAY);
 
     draw_smith_label(analyzer->z0_, Complex(analyzer->z0_, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
-    draw_smith_label(analyzer->z0_, Complex(analyzer->z0_*2.0, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
-    draw_smith_label(analyzer->z0_, Complex(analyzer->z0_/2.0, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
+    draw_smith_label(analyzer->z0_*2, Complex(analyzer->z0_*2.0, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
+    draw_smith_label(analyzer->z0_/2.0, Complex(analyzer->z0_/2.0, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
     draw_smith_label(analyzer->z0_, Complex(analyzer->z0_, analyzer->z0_), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
     draw_smith_label(analyzer->z0_, Complex(analyzer->z0_, -analyzer->z0_), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
 

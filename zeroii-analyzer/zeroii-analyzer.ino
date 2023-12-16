@@ -17,7 +17,7 @@
 #include "menu_manager.h"
 #include "persistence.h"
 
-#define WAIT_FOR_SERIAL 1
+#define WAIT_FOR_SERIAL 0
 
 #define VBATT_ALPHA 0.05
 #define BATT_SENSE_PIN A3
@@ -195,6 +195,19 @@ class AnalysisProcessor {
 AnalysisProcessor analysis_processor;
 
 RTC_DS3231 rtc;
+
+// Call back for file timestamps.  Only called for file create and sync().
+void date_callback(uint16_t* date, uint16_t* time, uint8_t* ms10) {
+    DateTime now = rtc.now();
+    // Return date using FS_DATE macro to format fields.
+    *date = FS_DATE(now.year(), now.month(), now.day());
+
+    // Return time using FS_TIME macro to format fields.
+    *time = FS_TIME(now.hour(), now.minute(), now.second());
+
+    // Return low time bits in units of 10 ms.
+    *ms10 = now.second() & 1 ? 100 : 0;
+}
 
 SdFs sd;
 SerialWombatChip sw;
@@ -886,6 +899,7 @@ void setup() {
         tft.println("SD failed to start");
         setup_failed();
     }
+    FsDateTime::setCallback(date_callback);
 
     Serial.println("starting ZEROII...");
     tft.println("Starting ZEROII...");
