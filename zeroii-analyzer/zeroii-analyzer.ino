@@ -197,16 +197,13 @@ AnalysisProcessor analysis_processor;
 RTC_DS3231 rtc;
 
 // Call back for file timestamps.  Only called for file create and sync().
-void date_callback(uint16_t* date, uint16_t* time, uint8_t* ms10) {
+void date_callback(uint16_t* date, uint16_t* time) {
     DateTime now = rtc.now();
     // Return date using FS_DATE macro to format fields.
     *date = FS_DATE(now.year(), now.month(), now.day());
 
     // Return time using FS_TIME macro to format fields.
     *time = FS_TIME(now.hour(), now.minute(), now.second());
-
-    // Return low time bits in units of 10 ms.
-    *ms10 = now.second() & 1 ? 100 : 0;
 }
 
 SdFs sd;
@@ -215,7 +212,7 @@ SerialWombatChip sw;
 SerialWombatQuadEnc quad_enc(sw);
 SerialWombatDebouncedInput debounced_input(sw);
 
-int8_t turn = 0;
+int32_t turn = 0;
 uint16_t last_quad_enc = 32768;
 bool click = false;
 
@@ -529,8 +526,8 @@ class FqSetter {
 
 FqSetter fq_setter;
 
-uint32_t band_fqs[][2] = { {135700, 137800}, {472000, 479000}, {1800000, 2000000}, {3500000, 4000000}, {5330500, 5406400}, {7000000, 7300000}, {10100000, 10150000}, {14000000, 14350000}, {18068000, 18168000}, {2100000, 21450000}, {24890000, 24990000}, {28000000, 29700000}, {50000000, 54000000}, {144000000, 148000000}, {219000000, 225000000}, {420000000, 450000000}, {902000000, 928000000} };
-String band_names[] = {"2200m", "630m", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "VHF", "1.25m", "UHF", "33cm"};
+uint32_t band_fqs[][2] = { {135700, 137800}, {472000, 479000}, {1800000, 2000000}, {3500000, 4000000}, {5330500, 5406400}, {7000000, 7300000}, {10100000, 10150000}, {14000000, 14350000}, {18068000, 18168000}, {2100000, 21450000}, {24890000, 24990000}, {28000000, 29700000}, {50000000, 54000000}, {144000000, 148000000}, {219000000, 225000000}, {420000000, 450000000}, {902000000, 928000000}, {100000, 600000000} };
+String band_names[] = {"2200m", "630m", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "VHF", "1.25m", "UHF", "33cm", "Reference RF"};
 class BandSetter {
     public:
     void initialize() {
@@ -545,7 +542,7 @@ class BandSetter {
         if (click) {
             return true;
         } else if (turn != 0) {
-            band_idx_ = constrain(band_idx_+turn, 0, sizeof(band_names)/sizeof(band_names[0]));
+            band_idx_ = constrain((int32_t)band_idx_+turn, 0, sizeof(band_names)/sizeof(band_names[0])-1);
             draw_band_setting();
         }
         return false;
@@ -698,13 +695,8 @@ void handle_option() {
             if (click) {
                 choose_option();
             } else if (turn != 0) {
-                if(turn < 0) {
-                    menu_manager.select_down();
-                    draw_menu(menu_manager.current_menu_, menu_manager.current_option_, false);
-                } else if(turn > 0) {
-                    menu_manager.select_up();
-                    draw_menu(menu_manager.current_menu_, menu_manager.current_option_, false);
-                }
+                menu_manager.select_rel(turn);
+                draw_menu(menu_manager.current_menu_, menu_manager.current_option_, false);
             }
             break;
         case MOPT_BACK:

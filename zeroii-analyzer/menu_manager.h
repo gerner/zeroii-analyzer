@@ -51,6 +51,10 @@ class MenuManager {
             }
         }
 
+        void select_rel(int32_t delta) {
+            select(constrain((int32_t)current_menu_->selected_option+delta, 0, current_menu_->option_count-1));
+        }
+
         void select_up() {
             select(current_menu_->selected_option+1);
         }

@@ -60,26 +60,60 @@ size_t lstrip(const char* str, size_t len) {
     return i;
 }
 
+void fsdate_to_ymd(uint16_t fs_date, uint16_t* y, uint8_t* m, uint8_t* d) {
+    // fs_date packs 7-bit year shifted up 9, 4 bit month up 5, then 5 bit day
+    // year 0 starts at 1980
+    *y = (fs_date >> 9) + 1980;
+    *m = (fs_date >> 5) & 15;
+    *d = fs_date & 31;
+}
+
+void fstime_to_hms(uint16_t fs_time, uint8_t* H, uint8_t* M, uint8_t* S) {
+    // fs_time packs 5 bit hour shifted up 11, 6-bit minute shifted up 5, 5-bit second shifted down 1 (2 second resolution)
+    *H = fs_time >> 11;
+    *M = (fs_time >> 5) & 0X3F;
+    *S = 2 * (fs_time & 0X1F);
+}
+
 void print_directory(FsBaseFile* dir, int numTabs=0) {
-  FsFile entry;
-  size_t filename_max_len = 128;
-  char filename[filename_max_len];
-  while (entry.openNext(dir, O_RDONLY)) {
-    for (uint8_t i = 0; i < numTabs; i++) {
-      Serial.print('\t');
+    FsFile entry;
+    size_t filename_max_len = 128;
+    char filename[filename_max_len];
+    while (entry.openNext(dir, O_RDONLY)) {
+        for (uint8_t i = 0; i < numTabs; i++) {
+            Serial.print('\t');
+        }
+        entry.getName(filename, filename_max_len);
+        Serial.print(filename);
+        if (entry.isDir()) {
+            Serial.println("/");
+            print_directory(&entry, numTabs + 1);
+        } else {
+            // files have sizes, directories do not
+            Serial.print("\t\t");
+            Serial.print(entry.size(), DEC);
+            Serial.print("\t");
+
+            uint16_t fs_date;
+            uint16_t fs_time;
+            entry.getModifyDateTime(&fs_date, &fs_time);
+
+            uint16_t y;
+            uint8_t m, d, H, M, S;
+            fsdate_to_ymd(fs_date, &y, &m, &d);
+            fstime_to_hms(fs_time, &H, &M, &S);
+
+
+            DateTime modify_time(y, m, d, H, M, S);
+            time_t t(modify_time.unixtime());
+            char formatted_date[20];
+            strftime(formatted_date, sizeof(formatted_date), "%Y-%m-%dT%H:%M:%S", localtime(&t));
+
+            Serial.println(formatted_date);
+
+        }
+        entry.close();
     }
-    entry.getName(filename, filename_max_len);
-    Serial.print(filename);
-    if (entry.isDir()) {
-      Serial.println("/");
-      print_directory(&entry, numTabs + 1);
-    } else {
-      // files have sizes, directories do not
-      Serial.print("\t\t");
-      Serial.println(entry.size(), DEC);
-    }
-    entry.close();
-  }
 }
 
 void shellfn_reset(const char* serial_command, size_t serial_command_len) {
@@ -178,6 +212,23 @@ void shellfn_df(const char* serial_command, size_t serial_command_len) {
     Serial.print("\t");
     Serial.print(((float)free_cluster_count)/((float)cluster_count));
     Serial.print("%\n");
+}
+
+void shellfn_fstype(const char* serial_command, size_t serial_command_len) {
+    uint8_t fat_type = sd.fatType();
+    switch(fat_type) {
+        case FAT_TYPE_EXFAT:
+            Serial.println("exFat");
+            break;
+        case FAT_TYPE_FAT32:
+            Serial.println("Fat32");
+            break;
+        case FAT_TYPE_FAT16:
+            Serial.println("Fat16");
+            break;
+        default:
+            Serial.println(String("unknown fat type: ")+fat_type);
+        }
 }
 
 void shellfn_rm(const char* serial_command, size_t serial_command_len) {
@@ -335,6 +386,7 @@ const char* SHELL_COMMANDS[] = {
     "aref",
     "dir",
     "df",
+    "fstype",
     "rm",
     "touch",
     "cat",
@@ -361,6 +413,7 @@ const shell_command_t SHELL_FUNCTIONS[] = {
     shellfn_aref,
     shellfn_dir,
     shellfn_df,
+    shellfn_fstype,
     shellfn_rm,
     shellfn_touch,
     shellfn_cat,
