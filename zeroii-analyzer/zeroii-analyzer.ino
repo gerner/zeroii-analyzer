@@ -98,6 +98,10 @@ Adafruit_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
 #define MENU_TEXT_SIZE 2
 #define MENU_ORIG_X 0
 #define MENU_ORIG_Y TITLE_TEXT_SIZE*8*2
+#define CONFIRM_ORIG_X TITLE_TEXT_SIZE*6
+#define CONFIRM_ORIG_Y TITLE_TEXT_SIZE*8*3
+
+#define ERROR_MESSAGE_DWELL_TIME 7000
 
 // For better pressure precision, we need to know the resistance
 // between X+ and X- Use any multimeter to read it
@@ -216,19 +220,31 @@ int32_t turn = 0;
 uint16_t last_quad_enc = 32768;
 bool click = false;
 
-#define MOPT_ANALYZE 1
-#define MOPT_FQ 2
-#define MOPT_CALIBRATE 3
-#define MOPT_FQCENTER 4
-#define MOPT_FQWINDOW 5
-#define MOPT_FQSTART 6
-#define MOPT_FQEND 7
-#define MOPT_FQBAND 8
-#define MOPT_FQSTEPS 9
-#define MOPT_BACK 10
-#define MOPT_SWR 11
-#define MOPT_SMITH 12
-#define MOPT_SAVE_RESULTS 13
+enum MOPT {
+    MOPT_ANALYZE,
+    MOPT_FQ,
+    MOPT_RESULTS,
+    MOPT_SETTINGS,
+
+    MOPT_FQCENTER,
+    MOPT_FQWINDOW,
+    MOPT_FQSTART,
+    MOPT_FQEND,
+    MOPT_FQBAND,
+    MOPT_FQSTEPS,
+
+    MOPT_SWR,
+    MOPT_SMITH,
+    MOPT_SAVE_RESULTS,
+    MOPT_LOAD_RESULTS,
+
+    MOPT_CALIBRATE,
+    MOPT_Z0,
+    MOPT_SAVE_SETTINGS,
+    MOPT_LOAD_SETTINGS,
+
+    MOPT_BACK,
+};
 
 MenuOption fq_menu_options[] = {
     MenuOption("Fq Start", MOPT_FQSTART, NULL),
@@ -241,13 +257,29 @@ MenuOption fq_menu_options[] = {
 };
 Menu fq_menu(NULL, fq_menu_options, sizeof(fq_menu_options)/sizeof(fq_menu_options[0]));
 
-MenuOption root_menu_options[] = {
-    MenuOption("Analyze", MOPT_ANALYZE, NULL),
-    MenuOption("Fq Options", MOPT_FQ, &fq_menu),
-    MenuOption("Calibration", MOPT_CALIBRATE, NULL),
+MenuOption results_menu_options[] {
     MenuOption("SWR graph", MOPT_SWR, NULL),
     MenuOption("Smith chart", MOPT_SMITH, NULL),
     MenuOption("Save Results", MOPT_SAVE_RESULTS, NULL),
+    MenuOption("Load Results", MOPT_LOAD_RESULTS, NULL),
+    MenuOption("Back", MOPT_BACK, NULL),
+};
+Menu results_menu(NULL, results_menu_options, sizeof(results_menu_options)/sizeof(results_menu_options[0]));
+
+MenuOption settings_menu_options[] = {
+    MenuOption("Calibration", MOPT_CALIBRATE, NULL),
+    MenuOption("Z0", MOPT_Z0, NULL),
+    MenuOption("Save Settings", MOPT_SAVE_SETTINGS, NULL),
+    MenuOption("Load Settings", MOPT_LOAD_SETTINGS, NULL),
+    MenuOption("Back", MOPT_BACK, NULL),
+};
+Menu settings_menu(NULL, settings_menu_options, sizeof(settings_menu_options)/sizeof(settings_menu_options[0]));
+
+MenuOption root_menu_options[] = {
+    MenuOption("Analyze", MOPT_ANALYZE, NULL),
+    MenuOption("Frequencies", MOPT_FQ, &fq_menu),
+    MenuOption("Results", MOPT_RESULTS, &results_menu),
+    MenuOption("Settings", MOPT_SETTINGS, &settings_menu),
 };
 Menu root_menu(NULL, root_menu_options, sizeof(root_menu_options)/sizeof(root_menu_options[0]));
 
@@ -325,9 +357,41 @@ void draw_title() {
     tft.setCursor(0,0);
     tft.setTextSize(TITLE_TEXT_SIZE);
 
-    tft.print(frequency_formatter(startFq) + " to " + frequency_formatter(endFq));
-    tft.print(" St: ");
+    tft.print(frequency_formatter(startFq) + "-" + frequency_formatter(endFq));
+    tft.print(" St:");
     tft.print(dotsNumber);
+    tft.print(" Z0:");
+    tft.print((uint32_t)analyzer.z0_);
+
+    draw_error();
+}
+
+uint32_t last_error_print = 0;
+uint32_t last_error_time = 0;
+char error_message[128];
+
+void clear_error_display() {
+    current_error("");
+    tft.fillRect(0, tft.height()-8*TITLE_TEXT_SIZE, tft.width(), 8*TITLE_TEXT_SIZE, BLACK);
+}
+
+void current_error(const char* error_msg) {
+    strncpy(error_message, error_msg, sizeof(error_message));
+    last_error_time = millis();
+    draw_error();
+}
+
+void draw_error() {
+    if (error_message[0] && millis() - last_error_time < ERROR_MESSAGE_DWELL_TIME) {
+        tft.fillRect(0, tft.height()-8*TITLE_TEXT_SIZE, tft.width(), 8*TITLE_TEXT_SIZE, BLACK);
+        tft.setCursor(0, tft.height()-8*TITLE_TEXT_SIZE);
+        tft.setTextSize(TITLE_TEXT_SIZE);
+        tft.setTextColor(RED);
+
+        tft.print(error_message);
+
+        tft.setTextColor(WHITE);
+    }
 }
 
 void draw_vbatt() {
@@ -348,7 +412,7 @@ void draw_vbatt() {
     tft.print("v");
 }
 
-void clear_menu(Menu* current_menu) {
+void clear_menu(Menu* current_menu, int16_t menu_x=MENU_ORIG_X, int16_t menu_y=MENU_ORIG_Y) {
     int16_t w = 1;
     int16_t h = 8*current_menu->option_count*MENU_TEXT_SIZE;
     for(int i=0; i<current_menu->option_count; i++) {
@@ -357,20 +421,20 @@ void clear_menu(Menu* current_menu) {
         }
     }
     w = 6*MENU_TEXT_SIZE*w;
-    tft.fillRect(MENU_ORIG_X, MENU_ORIG_Y, w, h, BLACK);
+    tft.fillRect(menu_x, menu_y, w, h, BLACK);
 }
 
 // draws menu on the tft
-void draw_menu(Menu* current_menu, int current_option, bool fresh=true) {
+void draw_menu(Menu* current_menu, int current_option, bool fresh=true, int16_t menu_x=MENU_ORIG_X, int16_t menu_y=MENU_ORIG_Y) {
     if (fresh) {
-        clear_menu(current_menu);
+        clear_menu(current_menu, menu_x, menu_y);
     } else {
         // just blank the cursor area
-        tft.fillRect(MENU_ORIG_X, MENU_ORIG_Y, 6*MENU_TEXT_SIZE, 8*current_menu->option_count*MENU_TEXT_SIZE, BLACK);
+        tft.fillRect(menu_x, menu_y, 6*MENU_TEXT_SIZE, 8*current_menu->option_count*MENU_TEXT_SIZE, BLACK);
     }
-    tft.setCursor(MENU_ORIG_X, MENU_ORIG_Y);
     tft.setTextSize(MENU_TEXT_SIZE);
     for(int i=0; i<current_menu->option_count; i++) {
+        tft.setCursor(menu_x, menu_y+i*8*MENU_TEXT_SIZE);
         // either:
         // this is the current option
         // this is the selected option
@@ -382,7 +446,7 @@ void draw_menu(Menu* current_menu, int current_option, bool fresh=true) {
         } else {
             tft.print(" ");
         }
-        tft.println(current_menu->options[i].label);
+        tft.print(current_menu->options[i].label);
     }
 }
 
@@ -391,7 +455,8 @@ void menu_back() {
     leave_option(menu_manager.current_option_);
     clear_menu(menu_manager.current_menu_);
     menu_manager.collapse();
-    draw_menu(menu_manager.current_menu_, menu_manager.current_option_);
+    draw_menu(menu_manager.current_menu_, menu_manager.current_option_, true);
+    draw_title();
 }
 
 typedef String (*int_formatter) (const int32_t);
@@ -565,6 +630,166 @@ class BandSetter {
 
 BandSetter band_setter;
 
+class FileBrowser {
+    public:
+    FileBrowser() : file_menu_(NULL), file_options_(NULL) {}
+
+    ~FileBrowser() {
+        if (file_menu_) {
+            delete file_menu_;
+            delete [] file_options_;
+        }
+    }
+
+    bool initialize(FsFile* directory, bool with_new) {
+        Serial.println("initializing file browser");
+        Serial.flush();
+
+        tft.fillScreen(BLACK);
+        draw_title();
+
+        if(!directory->isOpen() || !directory->isDirectory()) {
+            return false;
+        }
+        if (file_menu_) {
+            delete file_menu_;
+            delete [] file_options_;
+        }
+
+        with_new_ = with_new;
+
+        Serial.println("counting files in directory");
+        Serial.flush();
+
+        // awkward to iterate through directory once to get count and a second
+        // time to actually get the names into the array. not sure how else to
+        // do it with an array of MenuOptions (no stl shenanigans)
+        size_t file_count = 0;
+        directory->rewindDirectory();
+        FsFile entry;
+        while(entry.openNext(directory, O_RDONLY)) {
+            file_count++;
+        }
+
+        Serial.println("allocating file options");
+        Serial.flush();
+
+        size_t idx;
+        if (with_new_) {
+            file_count++;
+            file_options_ = new MenuOption[file_count];
+            file_options_[0].label = String("New File");
+            idx = 1;
+        } else {
+            file_options_ = new MenuOption[file_count];
+            idx = 0;
+        }
+
+        Serial.println("iterating through directory");
+        Serial.flush();
+
+        directory->rewindDirectory();
+        while(entry.openNext(directory, O_RDONLY) && idx < file_count) {
+            char filename[128];
+            entry.getName(filename, sizeof(filename));
+            file_options_[idx++].label = String(filename);
+        }
+
+        file_menu_ = new Menu(NULL, file_options_, file_count);
+
+        Serial.println("drawing menu");
+        Serial.flush();
+
+        draw_menu(file_menu_, -1, true);
+        return true;
+    }
+
+    bool choose_file() {
+        if (click) {
+            return true;
+        } else if (turn != 0) {
+            file_menu_->selected_option = constrain((int32_t)file_menu_->selected_option+turn, 0, file_menu_->option_count);
+            draw_menu(file_menu_, -1, false);
+            return false;
+        } else {
+            return false;
+        }
+    }
+
+    bool is_new() {
+        return with_new_ && file_menu_->selected_option == 0;
+    }
+
+    void file(char* filename, size_t max_len) {
+        file_options_[file_menu_->selected_option].label.toCharArray(filename, max_len);
+    }
+
+    private:
+    bool with_new_;
+    MenuOption* file_options_;
+    Menu* file_menu_;
+};
+FileBrowser file_browser;
+
+bool browse_progress() {
+    return file_browser.choose_file();
+}
+
+typedef bool (*ProgressFn)(void);
+
+MenuOption confirmation_menu_options[] = {
+    MenuOption("Yes", 0, NULL),
+    MenuOption("Cancel", 0, NULL),
+};
+Menu confirmation_menu(NULL, confirmation_menu_options, sizeof(confirmation_menu_options)/sizeof(confirmation_menu_options[0]));
+
+class ConfirmDialog {
+    public:
+    void initialize(ProgressFn progress_fn) {
+        confirmation_menu.selected_option = 0;
+        progress_fn_ = progress_fn;
+        progress_ = true;
+    }
+
+    bool progress() {
+        if (progress_) {
+            Serial.println("calling inner progress fn");
+            if (click) {
+                Serial.println("click");
+            }
+            if(progress_fn_()) {
+                Serial.println("inner progress fn returned true, proceeding with confirmation.");
+                progress_ = false;
+                tft.fillScreen(BLACK);
+                tft.setCursor(CONFIRM_ORIG_X-6*TITLE_TEXT_SIZE, CONFIRM_ORIG_Y-8*TITLE_TEXT_SIZE);
+                tft.print("Are you sure?");
+                draw_title();
+                draw_menu(&confirmation_menu, -1, true, CONFIRM_ORIG_X, CONFIRM_ORIG_Y);
+            } else {
+                Serial.println("inner progress fn returned false");
+            }
+        } else {
+            if(click) {
+                return true;
+            } else if(turn != 0) {
+                confirmation_menu.selected_option = constrain((int32_t)confirmation_menu.selected_option+turn, 0, confirmation_menu.option_count);
+                draw_menu(&confirmation_menu, -1, false, CONFIRM_ORIG_X, CONFIRM_ORIG_Y);
+            }
+        }
+        return false;
+    }
+
+    bool confirm() {
+        return !progress_ && confirmation_menu.selected_option == 0;
+    }
+
+    private:
+    bool progress_;
+    ProgressFn progress_fn_;
+};
+
+ConfirmDialog confirm_dialog;
+
 void analyze(uint32_t startFq, uint32_t endFq, uint16_t dotsNumber, AnalysisPoint* results) {
     uint32_t fq = startFq;
     uint32_t stepFq = (endFq - startFq)/dotsNumber;
@@ -587,8 +812,6 @@ void enter_option(int32_t option_id) {
         case MOPT_ANALYZE:
             analysis_results_len = dotsNumber;
             analysis_processor.initialize(startFq, endFq, dotsNumber, analysis_results);
-            break;
-        case MOPT_SAVE_RESULTS:
             break;
         case MOPT_FQCENTER: {
             int32_t centerFq = startFq + (endFq-startFq)/2;
@@ -618,6 +841,22 @@ void enter_option(int32_t option_id) {
             draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             break;
         }
+        case MOPT_SAVE_RESULTS:
+            file_browser.initialize(&persistence.results_dir_, true);
+            confirm_dialog.initialize(&browse_progress);
+            break;
+        case MOPT_LOAD_RESULTS:
+            file_browser.initialize(&persistence.results_dir_, false);
+            confirm_dialog.initialize(&browse_progress);
+            break;
+        case MOPT_SAVE_SETTINGS:
+            file_browser.initialize(&persistence.settings_dir_, true);
+            confirm_dialog.initialize(&browse_progress);
+            break;
+        case MOPT_LOAD_SETTINGS:
+            file_browser.initialize(&persistence.settings_dir_, false);
+            confirm_dialog.initialize(&browse_progress);
+            break;
     }
 }
 
@@ -666,6 +905,76 @@ void leave_option(int32_t option_id) {
             draw_title();
             break;
         case MOPT_SAVE_RESULTS:
+            if(confirm_dialog.confirm()) {
+                if(file_browser.is_new()) {
+                    if(!persistence.save_results(analysis_results, analysis_results_len)) {
+                        Serial.println("could not save results");
+                        current_error("could not save results");
+                    }
+                } else {
+                    char filename[128];
+                    file_browser.file(filename, sizeof(filename));
+                    if(!persistence.save_results(filename, analysis_results, analysis_results_len)) {
+                        Serial.println("could not save results");
+                        current_error("could not save results");
+                    }
+                }
+            } else {
+                Serial.println("cancelled saving results");
+                current_error("cancelled saving results");
+            }
+            tft.fillScreen(BLACK);
+            draw_title();
+            break;
+        case MOPT_LOAD_RESULTS:
+            if(confirm_dialog.confirm()) {
+                char filename[128];
+                file_browser.file(filename, sizeof(filename));
+                if(!persistence.load_results(filename, analysis_results, &analysis_results_len, MAX_STEPS)) {
+                    Serial.println("could not load results");
+                    current_error("could not load results");
+                }
+            } else {
+                Serial.println("cancelled loading results");
+                current_error("cancelled loading results");
+            }
+            tft.fillScreen(BLACK);
+            draw_title();
+            break;
+        case MOPT_SAVE_SETTINGS:
+            if(confirm_dialog.confirm()) {
+                if(file_browser.is_new()) {
+                    if(!persistence.save_settings(&analyzer)) {
+                        Serial.println("could not save settings");
+                        current_error("could not save settings");
+                    }
+                } else {
+                    char filename[128];
+                    file_browser.file(filename, sizeof(filename));
+                    if(!persistence.save_settings(filename, &analyzer)) {
+                        Serial.println("could not save settings");
+                        current_error("could not save settings");
+                    }
+                }
+            } else {
+                Serial.println("cancelled saving settings");
+                current_error("cancelled saving settings");
+            }
+            tft.fillScreen(BLACK);
+            draw_title();
+            break;
+        case MOPT_LOAD_SETTINGS:
+            if(confirm_dialog.confirm()) {
+                char filename[128];
+                file_browser.file(filename, sizeof(filename));
+                if(!persistence.load_settings(filename, &analyzer)) {
+                    Serial.println("could not load settings");
+                    current_error("could not load settings");
+                }
+            } else {
+                Serial.println("cancelled loading settings");
+                current_error("cancelled loading settings");
+            }
             tft.fillScreen(BLACK);
             draw_title();
             break;
@@ -708,15 +1017,12 @@ void handle_option() {
         case MOPT_ANALYZE:
             if (analysis_processor.analyze()) {
                 menu_back();
-                menu_manager.select_option(MOPT_SWR);
-                choose_option();
+                if(!menu_manager.select_option(MOPT_SWR)) {
+                    Serial.println("could not find SWR option");
+                } else {
+                    choose_option();
+                }
             }
-            break;
-        case MOPT_SAVE_RESULTS:
-            if(!persistence.save_results(analysis_results, analysis_results_len)) {
-                Serial.println("could not save results");
-            }
-            menu_back();
             break;
         case MOPT_SWR:
             if (click) {
@@ -738,6 +1044,14 @@ void handle_option() {
                 assert(swr_i < analysis_results_len);
                 draw_smith_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
                 draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+            }
+            break;
+        case MOPT_SAVE_RESULTS:
+        case MOPT_LOAD_RESULTS:
+        case MOPT_SAVE_SETTINGS:
+        case MOPT_LOAD_SETTINGS:
+            if(confirm_dialog.progress()) {
+                menu_back();
             }
             break;
         case MOPT_FQCENTER:
@@ -764,14 +1078,16 @@ void handle_option() {
         case MOPT_CALIBRATE: {
             uint8_t calibration_state = calibrator.calibration_step();
             if (calibration_state == CAL_END) {
-                if(!persistence.save_settings(&analyzer)) {
-                    Serial.println("could not save settings");
-                }
                 menu_back();
             }
             break;
         }
+        case MOPT_Z0:
+            analyzer.z0_ = set_user_value(analyzer.z0_, 1, 999, "Z0");
+            break;
         default:
+            Serial.println(String("don't know what to do with option ")+menu_manager.current_option_);
+            menu_back();
             break;
     }
 }
@@ -852,6 +1168,7 @@ void setup() {
     }
 
     init_vbatt();
+    current_error("");
 
     Serial.println("starting TFT...");
 
@@ -950,13 +1267,28 @@ void setup() {
 }
 
 void loop() {
-    if (last_vbatt + BATT_SENSE_PERIOD < millis()) {
+    uint32_t now = millis();
+    if (last_vbatt + BATT_SENSE_PERIOD < now) {
         update_vbatt();
         draw_vbatt();
     }
 
+    if (error_message[0] && now - last_error_time > ERROR_MESSAGE_DWELL_TIME) {
+        clear_error_display();
+    }
+
     debounced_input.readTransitionsState();
     click = debounced_input.transitions > 0 && !debounced_input.digitalRead();
+
+    if(click) {
+        Serial.println("got a click");
+    }
+
+    if(click && error_message[0]) {
+        //clear errors on positive user interaction
+        clear_error_display();
+    }
+
     uint16_t next_quad_enc = quad_enc.read(32768);
     turn = next_quad_enc - last_quad_enc;
 

@@ -6,6 +6,7 @@
 struct Menu;
 
 struct MenuOption {
+    MenuOption() : sub_menu(NULL) { }
     MenuOption(String l, uint16_t oid, Menu* sm) {
         label = l;
         option_id = oid;
@@ -63,13 +64,8 @@ class MenuManager {
             select(current_menu_->selected_option-1);
         }
 
-        void select_option(uint16_t option_id) {
-            for(size_t i; i<current_menu_->option_count; i++) {
-                if(current_menu_->options[i].option_id == option_id) {
-                    select(i);
-                    return;
-                }
-            }
+        bool select_option(uint16_t option_id) {
+            return select_option(root_menu_, option_id);
         }
 
         void expand() {
@@ -104,6 +100,20 @@ class MenuManager {
         int32_t current_option_;
 
     private:
+        bool select_option(Menu* m, uint16_t option_id) {
+            for(size_t i; i<m->option_count; i++) {
+                if(m->options[i].option_id == option_id) {
+                    current_menu_ = m;
+                    select(i);
+                    return true;
+                } else if(m->options[i].sub_menu) {
+                    if(select_option(m->options[i].sub_menu, option_id)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
 };
 
 #endif

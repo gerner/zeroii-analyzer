@@ -167,7 +167,7 @@ class AnalyzerPersistence {
     // load named results
     bool load_results(const char* name, AnalysisPoint* results, size_t *results_len, const size_t max_len) {
         FsFile entry;
-        if(!entry.open(&results_dir_, "name", O_RDONLY)) {
+        if(!entry.open(&results_dir_, name, O_RDONLY)) {
             Serial.println(String("could not open results file ") + name);
             return false;
         }
