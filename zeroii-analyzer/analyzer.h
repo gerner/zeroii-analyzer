@@ -1,6 +1,7 @@
 #ifndef _ANALYZER_H
 #define _ANALYZER_H
 
+#include <algorithm>
 #include "Complex.h"
 
 Complex compute_gamma(const Complex z, const float z0_real) {
@@ -45,62 +46,6 @@ float compute_swr(Complex gamma) {
     }
 }
 
-class Analyzer {
-    public:
-        Analyzer(float z0) {
-            z0_ = z0;
-            cal_short_ = Complex(-1);
-            cal_open_ = Complex(1);
-            cal_load_ = Complex(0);
-        }
-
-        Complex calibrate_short(uint32_t fq, float z0) {
-            cal_short_ = compute_gamma(uncalibrated_measure(fq), z0);
-            return cal_short_;
-        }
-
-        Complex calibrate_open(uint32_t fq, float z0) {
-            cal_open_ = compute_gamma(uncalibrated_measure(fq), z0);
-            return cal_open_;
-        }
-
-        Complex calibrate_load(uint32_t fq, float z0) {
-            cal_load_ = compute_gamma(uncalibrated_measure(fq), z0);
-            return cal_load_;
-        }
-
-        void calibrate(Complex cal_short, Complex cal_open, Complex cal_load) {
-            cal_short_ = cal_short;
-            cal_open_ = cal_open;
-            cal_load_ = cal_load;
-        }
-
-        Complex uncalibrated_measure(uint32_t fq) {
-            Serial.println("starting to measure");
-            zeroii_.startMeasure(fq);
-            Serial.println("start returned");
-            Serial.flush();
-
-            float R = zeroii_.getR();
-            float X = zeroii_.getX();
-
-            Serial.println(String("")+R+" + "+X+" i");
-
-            return Complex(R, X);
-        }
-
-        Complex calibrated_gamma(Complex uncalibrated_z) const {
-            return calibrate_reflection(cal_short_, cal_open_, cal_load_, compute_gamma(uncalibrated_z, z0_));
-        }
-
-        RigExpertZeroII_I2C zeroii_;
-
-        float z0_;
-        Complex cal_short_;
-        Complex cal_open_;
-        Complex cal_load_;
-};
-
 struct AnalysisPoint {
     uint32_t fq;
     Complex uncal_z;
@@ -122,6 +67,76 @@ struct AnalysisPoint {
         *(uint32_t*)data = point.fq;
         *(Complex *)(data+sizeof(uint32_t)) = point.uncal_z;
     }
+};
+
+struct CalibrationPoint {
+    CalibrationPoint() {
+    }
+
+    CalibrationPoint(uint32_t f, Complex s, Complex o, Complex l) {
+        fq = f;
+        cal_short = s;
+        cal_open = o;
+        cal_load = l;
+    }
+
+    uint32_t fq;
+    Complex cal_short;
+    Complex cal_open;
+    Complex cal_load;
+};
+
+bool CalibrationCmp(const CalibrationPoint &lhs, const uint32_t &fq) {
+    return lhs.fq < fq;
+}
+
+CalibrationPoint uncalibrated_point = CalibrationPoint(0, Complex(-1), Complex(1), Complex(0));
+
+class Analyzer {
+    public:
+        Analyzer(float z0, CalibrationPoint* calibration_results) {
+            z0_ = z0;
+            calibration_len_ = 0;
+            calibration_results_ = calibration_results;
+        }
+
+        Complex uncalibrated_measure(uint32_t fq) {
+            Serial.println("starting to measure");
+            zeroii_.startMeasure(fq);
+            Serial.println("start returned");
+            Serial.flush();
+
+            float R = zeroii_.getR();
+            float X = zeroii_.getX();
+
+            Serial.println(String("")+R+" + "+X+" i");
+
+            return Complex(R, X);
+        }
+
+        Complex calibrated_gamma(const AnalysisPoint &p) const {
+            return calibrated_gamma(p.fq, p.uncal_z);
+        }
+
+        Complex calibrated_gamma(uint32_t fq, Complex uncalibrated_z) const {
+            CalibrationPoint* cal = find_calibration(fq);
+            return calibrate_reflection(cal->cal_short, cal->cal_open, cal->cal_load, compute_gamma(uncalibrated_z, z0_));
+        }
+
+        CalibrationPoint* find_calibration(uint32_t fq) const {
+            if(calibration_len_ == 0) {
+                return &uncalibrated_point;
+            } else {
+                size_t i;
+                return std::lower_bound(calibration_results_, &calibration_results_[calibration_len_], fq, CalibrationCmp);
+            }
+        }
+
+        RigExpertZeroII_I2C zeroii_;
+
+        float z0_;
+        size_t calibration_len_;
+        CalibrationPoint *calibration_results_;
 };
 
 #endif

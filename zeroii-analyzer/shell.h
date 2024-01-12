@@ -116,27 +116,27 @@ void print_directory(FsBaseFile* dir, int numTabs=0) {
     }
 }
 
-void shellfn_reset(const char* serial_command, size_t serial_command_len) {
+void shellfn_reset(size_t argc, char* argv[]) {
     Serial.println("resetting");
     NVIC_SystemReset();
 }
 
-void shellfn_eeprom(const char* serial_command, size_t serial_command_len) {
-    if(serial_command_len < 7) {
+void shellfn_eeprom(size_t argc, char* argv[]) {
+    if(argc < 2) {
         Serial.println("usage: `eeprom IDX` where IDX is an index into eeprom");
         return;
     }
-    int idx = str2int(serial_command+7, serial_command_len-7);
+    int idx = atoi(argv[1]);
     Serial.println(String("eeprom idx\t")+idx+":\t0x"+String(EEPROM.read(idx), HEX));
 }
 
-void shellfn_result(const char* serial_command, size_t serial_command_len) {
-    if(serial_command_len < 7) {
+void shellfn_result(size_t argc, char* argv[]) {
+    if(argc < 2) {
         Serial.println("usage: `results IDX` where IDX is a index into result array");
         return;
     }
 
-    int idx = str2int(serial_command+7, serial_command_len-7);
+    int idx = atoi(argv[1]);
     if(idx >= analysis_results_len) {
         Serial.println(String("idx ")+idx+" >= "+analysis_results_len);
     } else {
@@ -146,13 +146,13 @@ void shellfn_result(const char* serial_command, size_t serial_command_len) {
         Serial.print("Uncal gamma:\t");
         Serial.println(compute_gamma(analysis_results[idx].uncal_z, 50));
         Serial.print("Cal gamma:\t");
-        Serial.println(analyzer.calibrated_gamma(analysis_results[idx].uncal_z));
+        Serial.println(analyzer.calibrated_gamma(analysis_results[idx]));
         Serial.print("SWR:\t");
-        Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[idx].uncal_z)));
+        Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[idx])));
     }
 }
 
-void shellfn_results(const char* serial_command, size_t serial_command_len) {
+void shellfn_results(size_t argc, char* argv[]) {
     for (size_t i=0; i<analysis_results_len; i++) {
         Serial.print(analysis_results[i].fq);
         Serial.print("\t");
@@ -160,13 +160,18 @@ void shellfn_results(const char* serial_command, size_t serial_command_len) {
         Serial.print("\t");
         Serial.print(compute_gamma(analysis_results[i].uncal_z, 50));
         Serial.print("\t");
-        Serial.print(analyzer.calibrated_gamma(analysis_results[i].uncal_z));
+        Serial.print(analyzer.calibrated_gamma(analysis_results[i]));
         Serial.print("\t");
-        Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[i].uncal_z)));
+        Serial.println(compute_swr(analyzer.calibrated_gamma(analysis_results[i])));
     }
 }
 
-void shellfn_batt(const char* serial_command, size_t serial_command_len) {
+void shellfn_menu_state(size_t argc, char* argv[]) {
+    Serial.println(menu_manager.current_option_);
+}
+
+
+void shellfn_batt(size_t argc, char* argv[]) {
     uint16_t batt_raw = analogRead(A3);
     Serial.print(batt_raw);
     Serial.print("\t");
@@ -179,14 +184,14 @@ void shellfn_batt(const char* serial_command, size_t serial_command_len) {
     Serial.println(vbatt);
 }
 
-void shellfn_aref(const char* serial_command, size_t serial_command_len) {
+void shellfn_aref(size_t argc, char* argv[]) {
     Serial.print(analogRead(AVCC_MEASURE_PIN));
     Serial.print("\t");
     Serial.print(analogReference());
     Serial.print("\n");
 }
 
-void shellfn_dir(const char* serial_command, size_t serial_command_len) {
+void shellfn_dir(size_t argc, char* argv[]) {
     FsFile root;
     if (!root.open("/")) {
         Serial.println("could not open root!");
@@ -196,7 +201,7 @@ void shellfn_dir(const char* serial_command, size_t serial_command_len) {
     }
 }
 
-void shellfn_df(const char* serial_command, size_t serial_command_len) {
+void shellfn_df(size_t argc, char* argv[]) {
 
     uint32_t blocks_per_cluster = sd.vol()->sectorsPerCluster();
     uint32_t cluster_count = sd.vol()->clusterCount();
@@ -214,7 +219,7 @@ void shellfn_df(const char* serial_command, size_t serial_command_len) {
     Serial.print("%\n");
 }
 
-void shellfn_fstype(const char* serial_command, size_t serial_command_len) {
+void shellfn_fstype(size_t argc, char* argv[]) {
     uint8_t fat_type = sd.fatType();
     switch(fat_type) {
         case FAT_TYPE_EXFAT:
@@ -231,14 +236,13 @@ void shellfn_fstype(const char* serial_command, size_t serial_command_len) {
         }
 }
 
-void shellfn_rm(const char* serial_command, size_t serial_command_len) {
+void shellfn_rm(size_t argc, char* argv[]) {
 
-    size_t ws_len = lstrip(serial_command+2, serial_command_len-2);
-    const char* target_name = serial_command+2+ws_len;
-    if (!target_name) {
+    if (argc < 2) {
         Serial.println("remove what file?");
         return;
     }
+    const char* target_name = argv[1];
     if(strcmp(target_name, "/") == 0) {
         Serial.println("can't remove root");
         return;
@@ -270,13 +274,56 @@ void shellfn_rm(const char* serial_command, size_t serial_command_len) {
     Serial.println(String("removed ")+target_name);
 }
 
-void shellfn_touch(const char* serial_command, size_t serial_command_len) {
-    size_t ws_len = lstrip(serial_command+5, serial_command_len-5);
-    const char* target_name = serial_command+5+ws_len;
-    if (!target_name) {
+void shellfn_mv(size_t argc, char* argv[]) {
+
+    if (argc < 2) {
+        Serial.println("move what file?");
+        return;
+    }
+    const char* target_name = argv[1];
+    if(strcmp(target_name, "/") == 0) {
+        Serial.println("can't move root");
+        return;
+    }
+
+    if(argc < 3) {
+        Serial.println("move it to what new name?");
+        return;
+    }
+    const char* new_name = argv[2];
+
+    if(!sd.exists(target_name)) {
+        Serial.println(String("no such file ")+target_name);
+        return;
+    }
+
+    FsFile target;
+    if(!target.open(target_name)) {
+        Serial.println(String("could not open")+target_name);
+        return;
+    }
+    if(target.isDirectory()) {
+        FsFile child;
+        if(target.openNext(&child)) {
+            Serial.println(String(target_name)+" is a non-empty directory");
+            return;
+        }
+    }
+    target.close();
+
+    if(!sd.rename(target_name, new_name)) {
+        Serial.println("remove failed");
+        return;
+    }
+    Serial.println(String("moved ")+target_name+" to "+new_name);
+}
+
+void shellfn_touch(size_t argc, char* argv[]) {
+    if (argc < 2) {
         Serial.println("touch what file?");
         return;
     }
+    const char* target_name = argv[1];
 
     FsFile target;
     if(!target.open(target_name, O_RDWR | O_CREAT | O_AT_END)) {
@@ -289,17 +336,16 @@ void shellfn_touch(const char* serial_command, size_t serial_command_len) {
     Serial.println("touched");
 }
 
-void shellfn_cat(const char* serial_command, size_t serial_command_len) {
-    size_t ws_len = lstrip(serial_command+3, serial_command_len-3);
-    const char* target_name = serial_command+3+ws_len;
-    if (!target_name) {
+void shellfn_cat(size_t argc, char* argv[]) {
+    if (argc < 2) {
         Serial.println("cat what file?");
         return;
     }
+    const char* target_name = argv[1];
 
     FsFile target;
     if(!target.open(target_name, O_RDONLY)) {
-        Serial.println(String("could not open ")+target_name+" for append");
+        Serial.println(String("could not open ")+target_name+" for read-only");
         return;
     }
 
@@ -310,31 +356,19 @@ void shellfn_cat(const char* serial_command, size_t serial_command_len) {
     target.close();
 }
 
-void shellfn_pixel(const char* serial_command, size_t serial_command_len) {
+void shellfn_pixel(size_t argc, char* argv[]) {
     //pixel x y [color]
     //without color, print the color of pixel x y
     //with color set pixel x y to color
 
-    char* ptr;
-    ptr = strchr(serial_command, ' ');
-    if (!ptr) {
+    if (argc < 3) {
         Serial.println("usage: pixel x y [color]");
         return;
     }
-    int x = str2int(ptr+1, serial_command_len-(serial_command-ptr)-1, &ptr);
-    ptr = strchr(ptr, ' ');
-    if (!ptr) {
-        Serial.println("usage: pixel x y [color]");
-        return;
-    }
-    int y = str2int(ptr+1, serial_command_len-(serial_command-ptr)-1, &ptr);
-    if (ptr < serial_command+serial_command_len) {
-        ptr = strchr(ptr, ' ');
-        if (!ptr) {
-            Serial.println("usage: pixel x y [color]");
-            return;
-        }
-        int color = str2int(ptr+1, serial_command_len-(serial_command-ptr)-1, &ptr);
+    int x = atoi(argv[1]);
+    int y = atoi(argv[2]);
+    if (argc > 3) {
+        int color = atoi(argv[3]);
         Serial.println(String("drawing pixel at ")+x+","+y+" "+color);
         tft.drawPixel(x, y, color);
     } else {
@@ -343,8 +377,8 @@ void shellfn_pixel(const char* serial_command, size_t serial_command_len) {
     }
 }
 
-void shellfn_date(const char* serial_command, size_t serial_command_len) {
-    if(serial_command_len == 4) {
+void shellfn_date(size_t argc, char* argv[]) {
+    if(argc == 1) {
         DateTime now = rtc.now();
         Serial.print(now.year(), DEC);
         Serial.print('-');
@@ -362,17 +396,11 @@ void shellfn_date(const char* serial_command, size_t serial_command_len) {
         Serial.print(rtc.getTemperature());
         Serial.print("C");
         Serial.println();
-    } else {
-        char* ptr = strchr(serial_command, ' ');
-        if(ptr && ptr - serial_command < serial_command_len) {
-            ptr++;
-            //assume ptr is 8601
-            DateTime new_now(ptr);
-            rtc.adjust(new_now);
-            Serial.println("set time");
-        } else {
-            Serial.println("expected iso8601 datetime");
-        }
+    } else if(argc > 1){
+        //assume argv[1] is 8601
+        DateTime new_now(argv[1]);
+        rtc.adjust(new_now);
+        Serial.println("set time");
     }
 }
 
@@ -380,46 +408,80 @@ const char* SHELL_COMMANDS[] = {
     "help",
     "reset",
     "eeprom",
-    "result",
-    "results",
     "batt",
     "aref",
     "dir",
     "df",
     "fstype",
     "rm",
+    "mv",
     "touch",
     "cat",
     "pixel",
-    "date"
+    "date",
+
+    "result",
+    "results",
+    "menu_state",
 };
 
-void shellfn_help(const char* serial_command, size_t serial_command_len) {
+void shellfn_help(size_t argc, char* argv[]) {
     Serial.println(String("available commands (")+sizeof(SHELL_COMMANDS)/sizeof(SHELL_COMMANDS[0])+"):");
     for(size_t i=0; i<sizeof(SHELL_COMMANDS)/sizeof(SHELL_COMMANDS[0]); i++) {
         Serial.println(String("\t")+SHELL_COMMANDS[i]);
     }
 }
 
-typedef void(*shell_command_t)(const char*, size_t);
+typedef void(*shell_command_t)(size_t, char**);
 
 const shell_command_t SHELL_FUNCTIONS[] = {
     shellfn_help,
     shellfn_reset,
     shellfn_eeprom,
-    shellfn_result,
-    shellfn_results,
     shellfn_batt,
     shellfn_aref,
     shellfn_dir,
     shellfn_df,
     shellfn_fstype,
     shellfn_rm,
+    shellfn_mv,
     shellfn_touch,
     shellfn_cat,
     shellfn_pixel,
-    shellfn_date
+    shellfn_date,
+
+    shellfn_result,
+    shellfn_results,
+    shellfn_menu_state
 };
+
+size_t split_args(char* command, size_t command_len, char** argv) {
+    size_t len_left = command_len;
+    char* current = command;
+    size_t i = 0;
+    while(current) {
+        Serial.println(String("considering: \"")+current+"\"");
+        size_t ws_len = lstrip(current, len_left);
+        if(ws_len == len_left) {
+            break;
+        }
+        argv[i] = current+ws_len;
+        char* next = (char*)memchr(argv[i], ' ', len_left-ws_len);
+        i++;
+        if(!next) {
+            break;
+        }
+        //null terminate argv[i], the next starts after the space we found
+        *next = 0;
+        len_left -= next+1 - current;
+        current = next+1;
+    }
+    Serial.println(String("\"")+command+"\" split into:");
+    for(size_t j=0; j<i; j++) {
+        Serial.println(String(j)+": \""+argv[j]+"\"");
+    }
+    return i;
+}
 
 void handle_serial_command() {
     if(serial_command_len == 0) {
@@ -436,7 +498,10 @@ void handle_serial_command() {
             continue;
         }
         if(strncmp(serial_command, SHELL_COMMANDS[i], command_name_len) == 0) {
-            SHELL_FUNCTIONS[i](serial_command, serial_command_len);
+            char* shell_argv[MAX_SERIAL_COMMAND];
+            size_t shell_argc = split_args(serial_command, serial_command_len, shell_argv);
+
+            SHELL_FUNCTIONS[i](shell_argc, shell_argv);
             return;
         }
     }

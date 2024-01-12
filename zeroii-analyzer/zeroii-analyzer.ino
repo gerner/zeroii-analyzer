@@ -128,11 +128,15 @@ TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 #define PROGRESS_METER_Y 8*2*4
 #define PROGRESS_METER_WIDTH (tft.width()-PROGRESS_METER_Y*2)
 
-Analyzer analyzer(Z0);
 // holds the most recent set of analysis results, initialize to zero length
 // array so we can realloc it below
 size_t analysis_results_len = 0;
 AnalysisPoint analysis_results[MAX_STEPS];
+
+size_t calibration_len = 0;
+CalibrationPoint calibration_results[MAX_STEPS];
+
+Analyzer analyzer(Z0, calibration_results);
 
 AnalyzerPersistence persistence;
 
@@ -290,64 +294,120 @@ uint32_t endFq = 28500000;
 uint16_t dotsNumber = 100;
 
 
-enum CAL_STEP { CAL_START, CAL_S, CAL_O, CAL_L, CAL_END };
+enum CAL_STEP { CAL_START, CAL_S_START, CAL_S, CAL_O_START, CAL_O, CAL_L_START, CAL_L, CAL_END };
 
 class Calibrator {
     public:
     Calibrator(Analyzer* analyzer) {
         analyzer_ = analyzer;
     }
-    void initialize(uint32_t target_fq) {
+    void initialize(uint32_t start_fq, uint32_t end_fq, uint16_t steps, CalibrationPoint* results) {
         calibration_state_ = CAL_START;
-        target_fq_ = target_fq;
+        start_fq_ = start_fq;
+        end_fq_ = end_fq;
+        fq_ = start_fq;
+        steps_ = steps;
+        step_fq_ = (end_fq - start_fq)/steps;
+        results_ = results;
+        result_idx_ = 0;
+
+        Serial.println(String("calibrating startFq ")+start_fq+" endFq "+end_fq+" steps "+steps+" step_fq "+step_fq_);
+        tft.fillScreen(BLACK);
+        draw_title();
     }
-    uint8_t calibration_step() {
+    bool calibration_step() {
         switch(calibration_state_) {
             case CAL_START:
-                tft.setTextSize(3);
+                tft.setTextSize(2);
                 tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
                 tft.setCursor(0, 7*2*8);
                 tft.println("connect short and press knob");
-                calibration_state_ = CAL_S;
+                calibration_state_ = CAL_S_START;
+                break;
+            // all three "start" cases are the same
+            // just increment the state on click
+            case CAL_S_START:
+            case CAL_O_START:
+            case CAL_L_START:
+                if (click) {
+                    Serial.print("calibration start state ");
+                    Serial.println(calibration_state_);
+                    calibration_state_++;
+                    fq_ = start_fq_;
+                    result_idx_ = 0;
+                    initialize_progress_meter("Calibrating...");
+                }
                 break;
             case CAL_S:
-                if (click) {
-                    tft.setTextSize(3);
+                if(fq_ <= end_fq_) {
+                    Serial.print("calibrating short fq: ");
+                    Serial.println(fq_);
+                    results_[result_idx_].cal_short = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
+                    results_[result_idx_].fq = fq_;
+                    result_idx_++;
+                    fq_ += step_fq_;
+                    draw_progress_meter(steps_, result_idx_);
+                } else {
+                    Serial.println("done calibrating short.");
+                    tft.setTextSize(2);
                     tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
                     tft.setCursor(0, 6*2*8);
-                    tft.println(analyzer_->calibrate_short(target_fq_, Z0));
                     tft.println("connect open and press knob");
-                    calibration_state_ = CAL_O;
+                    calibration_state_ = CAL_O_START;
                 }
                 break;
             case CAL_O:
-                if (click) {
-                    tft.setTextSize(3);
+                if(fq_ <= end_fq_) {
+                    Serial.print("calibrating open fq: ");
+                    Serial.println(fq_);
+                    results_[result_idx_].cal_open = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
+                    result_idx_++;
+                    fq_ += step_fq_;
+                    draw_progress_meter(steps_, result_idx_);
+                } else {
+                    Serial.println("done calibrating open.");
+                    tft.setTextSize(2);
                     tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
                     tft.setCursor(0, 6*2*8);
-                    tft.println(analyzer_->calibrate_open(target_fq_, Z0));
                     tft.println("connect load and press knob");
-                    calibration_state_ = CAL_L;
+                    calibration_state_ = CAL_L_START;
                 }
                 break;
             case CAL_L:
-                if (click) {
-                    tft.setTextSize(3);
+                if(fq_ <= end_fq_) {
+                    Serial.print("calibrating load fq: ");
+                    Serial.println(fq_);
+                    results_[result_idx_].cal_load = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
+                    result_idx_++;
+                    fq_ += step_fq_;
+                    draw_progress_meter(steps_, result_idx_);
+                } else {
+                    Serial.println("done calibrating load.");
+                    tft.setTextSize(2);
                     tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
                     tft.setCursor(0, 6*2*8);
-                    tft.println(analyzer_->calibrate_load(target_fq_, Z0));
                     tft.println("done calibrating.");
                     calibration_state_ = CAL_END;
+                    // we're done!
+                    return true;
                 }
                 break;
         }
-        return calibration_state_;
+        return false;
     }
 
     private:
     Analyzer* analyzer_;
     uint8_t calibration_state_;
-    uint32_t target_fq_;
+
+    uint32_t start_fq_;
+    uint32_t end_fq_;
+
+    uint32_t fq_;
+    uint32_t step_fq_;
+    CalibrationPoint* results_;
+    size_t steps_;
+    size_t result_idx_;
 };
 
 Calibrator calibrator(&analyzer);
@@ -826,7 +886,10 @@ void enter_option(int32_t option_id) {
         case MOPT_FQSTART: fq_setter.initialize(startFq); break;
         case MOPT_FQEND: fq_setter.initialize(endFq); break;
         case MOPT_FQBAND: band_setter.initialize(); break;
-        case MOPT_CALIBRATE: calibrator.initialize((endFq-startFq)/2); break;
+        case MOPT_CALIBRATE:
+            calibration_len = dotsNumber;
+            calibrator.initialize(startFq, endFq, dotsNumber, calibration_results);
+            break;
         case MOPT_SWR: {
             swr_i = 0;
             graph_swr(analysis_results, analysis_results_len, &analyzer);
@@ -904,6 +967,11 @@ void leave_option(int32_t option_id) {
             tft.fillScreen(BLACK);
             draw_title();
             break;
+        case MOPT_CALIBRATE:
+            tft.fillScreen(BLACK);
+            draw_title();
+            analyzer.calibration_len_ = calibration_len;
+            break;
         case MOPT_SAVE_RESULTS:
             if(confirm_dialog.confirm()) {
                 if(file_browser.is_new()) {
@@ -967,7 +1035,7 @@ void leave_option(int32_t option_id) {
             if(confirm_dialog.confirm()) {
                 char filename[128];
                 file_browser.file(filename, sizeof(filename));
-                if(!persistence.load_settings(filename, &analyzer)) {
+                if(!persistence.load_settings(filename, &analyzer, MAX_STEPS)) {
                     Serial.println("could not load settings");
                     current_error("could not load settings");
                 }
@@ -1076,8 +1144,7 @@ void handle_option() {
             dotsNumber = set_user_value(dotsNumber, 1, 128, "Steps");
             break;
         case MOPT_CALIBRATE: {
-            uint8_t calibration_state = calibrator.calibration_step();
-            if (calibration_state == CAL_END) {
+            if(calibrator.calibration_step()) {
                 menu_back();
             }
             break;
@@ -1247,7 +1314,7 @@ void setup() {
         tft.println("persistence failed to start");
         setup_failed();
     }
-    if(!persistence.load_settings(&analyzer)) {
+    if(!persistence.load_settings(&analyzer, MAX_STEPS)) {
         Serial.println("could not load existing settings");
     } else {
         Serial.println("loaded settings");
@@ -1304,7 +1371,7 @@ void loop() {
 
 void analyze_frequency(uint32_t fq) {
     Complex uncal_z = analyzer.uncalibrated_measure(fq);
-    Complex cal_gamma = analyzer.calibrated_gamma(uncal_z);
+    Complex cal_gamma = analyzer.calibrated_gamma(fq, uncal_z);
     float SWR = compute_swr(cal_gamma);
 
     Serial.print("Fq: ");

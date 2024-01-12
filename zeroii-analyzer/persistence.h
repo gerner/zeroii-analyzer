@@ -52,10 +52,15 @@ class AnalyzerPersistence {
     bool save_settings(const char* name, const Analyzer* analyzer) {
         DynamicJsonDocument settings_doc(8192);
         settings_doc["z0"] = analyzer->z0_;
-        settings_doc["cal_open"] = analyzer->cal_open_;
-        settings_doc["cal_short"] = analyzer->cal_short_;
-        settings_doc["cal_load"] = analyzer->cal_load_;
 
+        JsonArray calibration = settings_doc.createNestedArray("calibration");
+        for(size_t i; i<analyzer->calibration_len_; i++) {
+            JsonObject point = calibration.createNestedObject();
+            point["fq"] = analyzer->calibration_results_[i].fq;
+            point["cal_short"] = analyzer->calibration_results_[i].cal_short;
+            point["cal_open"] = analyzer->calibration_results_[i].cal_open;
+            point["cal_load"] = analyzer->calibration_results_[i].cal_load;
+        }
 
         FsFile entry;
         if(!entry.open(&settings_dir_, name, O_WRONLY | O_CREAT | O_TRUNC)) {
@@ -67,7 +72,7 @@ class AnalyzerPersistence {
         return true;
     }
 
-    bool load_settings(FsFile* entry, Analyzer* analyzer) {
+    bool load_settings(FsFile* entry, Analyzer* analyzer, size_t max_cal_len) {
         DynamicJsonDocument settings_doc(8192);
         FsFileReader reader(entry);
         DeserializationError err = deserializeJson(settings_doc, reader);
@@ -76,20 +81,29 @@ class AnalyzerPersistence {
             return false;
         }
         analyzer->z0_ = settings_doc["z0"].as<float>();
-        analyzer->cal_short_ = settings_doc["cal_short"].as<Complex>();
-        analyzer->cal_open_ = settings_doc["cal_open"].as<Complex>();
-        analyzer->cal_load_ = settings_doc["cal_load"].as<Complex>();
+
+        JsonArray calibration = settings_doc["calibration"];
+
+        size_t results_to_read = min(calibration.size(), max_cal_len);
+        for (size_t i=0; i<results_to_read; i++) {
+            analyzer->calibration_results_[i].fq = calibration[i]["fq"];
+            analyzer->calibration_results_[i].cal_short = calibration[i]["cal_short"];
+            analyzer->calibration_results_[i].cal_open = calibration[i]["cal_open"];
+            analyzer->calibration_results_[i].cal_load = calibration[i]["cal_load"];
+        }
+        analyzer->calibration_len_ = results_to_read;
+
         Serial.println("loaded settings");
         return true;
     }
 
     // load named settings
-    bool load_settings(const char* name, Analyzer* analyzer) {
+    bool load_settings(const char* name, Analyzer* analyzer, size_t max_cal_len) {
         FsFile entry;
         if(!entry.open(&settings_dir_, name, O_RDONLY)){
             return false;
         }
-        return load_settings(&entry, analyzer) && entry.close();
+        return load_settings(&entry, analyzer, max_cal_len) && entry.close();
     }
 
     // save settings to automatically named file
@@ -111,10 +125,10 @@ class AnalyzerPersistence {
     }
 
     // load most recent settings
-    bool load_settings(Analyzer* analyzer) {
+    bool load_settings(Analyzer* analyzer, size_t max_cal_len) {
         FsFile entry;
         if(find_latest_file(&settings_dir_, &entry, SETTINGS_PREFIX)) {
-            return load_settings(&entry, analyzer) && entry.close();
+            return load_settings(&entry, analyzer, max_cal_len) && entry.close();
         } else {
             Serial.println("no settings found");
             return false;
