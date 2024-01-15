@@ -813,10 +813,6 @@ class ConfirmDialog {
 
     bool progress() {
         if (progress_) {
-            Serial.println("calling inner progress fn");
-            if (click) {
-                Serial.println("click");
-            }
             if(progress_fn_()) {
                 Serial.println("inner progress fn returned true, proceeding with confirmation.");
                 progress_ = false;
@@ -825,8 +821,6 @@ class ConfirmDialog {
                 tft.print("Are you sure?");
                 draw_title();
                 draw_menu(&confirmation_menu, -1, true, CONFIRM_ORIG_X, CONFIRM_ORIG_Y);
-            } else {
-                Serial.println("inner progress fn returned false");
             }
         } else {
             if(click) {
@@ -1257,9 +1251,12 @@ void setup() {
     Serial.println("starting RTC...");
     tft.println("starting RTC...");
     if (!rtc.begin()) {
-        Serial.println("RTC failed to begin");
-        tft.println("RTC failed to begin");
-        setup_failed();
+        delay(100);
+        if(!rtc.begin()) {
+            Serial.println("RTC failed to begin");
+            tft.println("RTC failed to begin");
+            setup_failed();
+        }
     }
 
     if (rtc.lostPower()) {

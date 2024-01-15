@@ -460,7 +460,6 @@ size_t split_args(char* command, size_t command_len, char** argv) {
     char* current = command;
     size_t i = 0;
     while(current) {
-        Serial.println(String("considering: \"")+current+"\"");
         size_t ws_len = lstrip(current, len_left);
         if(ws_len == len_left) {
             break;
@@ -475,10 +474,6 @@ size_t split_args(char* command, size_t command_len, char** argv) {
         *next = 0;
         len_left -= next+1 - current;
         current = next+1;
-    }
-    Serial.println(String("\"")+command+"\" split into:");
-    for(size_t j=0; j<i; j++) {
-        Serial.println(String(j)+": \""+argv[j]+"\"");
     }
     return i;
 }
