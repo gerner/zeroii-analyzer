@@ -6,7 +6,6 @@
 
 #include <RTClib.h>
 #include <SdFat.h>
-#include <ArduinoJson.h>
 
 #define MAX_SERIAL_COMMAND 128
 char serial_command[MAX_SERIAL_COMMAND+1];
@@ -410,6 +409,8 @@ const char* SHELL_COMMANDS[] = {
     "eeprom",
     "batt",
     "aref",
+
+    //fs stuff
     "dir",
     "df",
     "fstype",
@@ -417,9 +418,14 @@ const char* SHELL_COMMANDS[] = {
     "mv",
     "touch",
     "cat",
+
+    //tft stuff
     "pixel",
+
+    //rtc stuff
     "date",
 
+    //stuff specific to antenna analyzer
     "result",
     "results",
     "menu_state",

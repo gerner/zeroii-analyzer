@@ -2,45 +2,386 @@
 #define _SETTINGS_H
 
 #include <SdFat.h>
-#include <ArduinoJson.h>
 #include <Complex.h>
+#include <JsonListener.h>
+#include <JsonStreamingParser.h>
 
+#include "log.h"
 #include "analyzer.h"
 
-namespace ARDUINOJSON_NAMESPACE {
-template <>
-struct Converter<Complex> {
-  static bool toJson(const Complex& src, JsonVariant dst) {
-    dst[0] = src.real();
-    dst[1] = src.imag();
-    return true;
-  }
-
-  static Complex fromJson(JsonVariantConst src) {
-    return Complex(src[0], src[1]);
-  }
-
-  static bool checkJson(JsonVariantConst src) {
-    return src[0].is<double>() && src[1].is<double>();
-  }
-};
-}
-
-struct FsFileReader {
-    FsFileReader(FsFile* entry) : entry_(entry) {}
-
-    int read() {
-        return entry_->read();
-    }
-
-    size_t readBytes(char* buffer, size_t length) {
-        return entry_->read(buffer, length);
-    }
-
-    FsFile* entry_;
-};
+Logger persistence_logger("persistence");
 
 // Tools for managing settings and results persistence
+
+enum SettingsListenerState { SETTINGS_START, SETTINGS_Z0, SETTINGS_CAL, SETTINGS_CAL_POINT, SETTINGS_CAL_FQ, SETTINGS_CAL_S, SETTINGS_CAL_S_R, SETTINGS_CAL_S_I, SETTINGS_CAL_O, SETTINGS_CAL_O_R, SETTINGS_CAL_O_I, SETTINGS_CAL_L, SETTINGS_CAL_L_R, SETTINGS_CAL_L_I };
+
+class SettingsJsonListener : public JsonListener {
+public:
+    SettingsJsonListener(size_t max_steps) {
+        max_steps_ = max_steps;
+        calibration_results_ = new CalibrationPoint[max_steps];
+    }
+
+    ~SettingsJsonListener() {
+        delete [] calibration_results_;
+    }
+
+    void initialize() {
+        state_ = SETTINGS_START;
+        has_error_ = false;
+        calibration_len_ = 0;
+        saw_z0_ = false;
+    }
+
+    void key(String k) {
+        if (has_error_) {
+            return;
+        }
+        switch(state_) {
+            case SETTINGS_START:
+                if (k == "z0") {
+                } else if(k == "calibration") {
+                    state_ = SETTINGS_CAL;
+                }
+                break;
+            case SETTINGS_CAL_POINT:
+                if (k == "fq") {
+                    state_ = SETTINGS_CAL_FQ;
+                } else if (k == "cal_short") {
+                    state_ = SETTINGS_CAL_S;
+                } else if (k == "cal_open") {
+                    state_ = SETTINGS_CAL_O;
+                } else if (k == "cal_load") {
+                    state_ = SETTINGS_CAL_L;
+                }
+                break;
+            default:
+                // only allow keys in the root or inside a calibration point
+                has_error_ = true;
+                persistence_logger.warn(String("key \"")+k+"\" found in state "+state_);
+        }
+    }
+
+    void value(String v) {
+        if (has_error_) {
+            return;
+        }
+        switch(state_) {
+            case SETTINGS_START:
+            case SETTINGS_CAL_POINT:
+                break;
+            case SETTINGS_Z0:
+                z0_ = atof(v.c_str());
+                state_ = SETTINGS_START;
+                break;
+            case SETTINGS_CAL_FQ:
+                calibration_results_[calibration_len_].fq = atoi(v.c_str());
+                state_ = SETTINGS_CAL_POINT;
+                break;
+            case SETTINGS_CAL_S_R:
+            case SETTINGS_CAL_O_R:
+            case SETTINGS_CAL_L_R:
+                cal_val_.setReal(atof(v.c_str()));
+                state_ += 1;
+                break;
+            case SETTINGS_CAL_S_I:
+            case SETTINGS_CAL_O_I:
+            case SETTINGS_CAL_L_I:
+                cal_val_.setImag(atof(v.c_str()));
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("value \"")+v+"\" found in state "+state_);
+        }
+    }
+
+    void startArray() {
+        if (has_error_) {
+            return;
+        }
+        switch(state_) {
+            case SETTINGS_START:
+            case SETTINGS_CAL:
+                break;
+            case SETTINGS_CAL_S:
+            case SETTINGS_CAL_O:
+            case SETTINGS_CAL_L:
+                state_++;
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("start array found in state ")+state_);
+        }
+    }
+
+    void endArray() {
+        if (has_error_) {
+            return;
+        }
+        switch(state_) {
+            case SETTINGS_START:
+                break;
+            case SETTINGS_CAL:
+                state_ = SETTINGS_START;
+                break;
+            case SETTINGS_CAL_S_I:
+                calibration_results_[calibration_len_].cal_short = cal_val_;
+                saw_cal_short_ = true;
+                state_ = SETTINGS_CAL_POINT;
+                break;
+            case SETTINGS_CAL_O_I:
+                calibration_results_[calibration_len_].cal_open = cal_val_;
+                saw_cal_open_ = true;
+                state_ = SETTINGS_CAL_POINT;
+                break;
+            case SETTINGS_CAL_L_I:
+                calibration_results_[calibration_len_].cal_load = cal_val_;
+                saw_cal_load_ = true;
+                state_ = SETTINGS_CAL_POINT;
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("end array found in state ")+state_);
+        }
+
+    }
+
+    void startObject() {
+        if (has_error_) {
+            return;
+        }
+        switch(state_) {
+            case SETTINGS_START:
+                break;
+            case SETTINGS_CAL:
+                if (calibration_len_ == max_steps_) {
+                    has_error_ = true;
+                    persistence_logger.warn("too many calibration points");
+                } else {
+                    state_ = SETTINGS_CAL_POINT;
+                    saw_fq_ = false;
+                    saw_cal_short_ = false;
+                    saw_cal_open_ = false;
+                    saw_cal_load_ = false;
+                }
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("start object found in state ")+state_);
+        }
+    }
+
+    void endObject() {
+        if (has_error_) {
+            return;
+        }
+        switch(state_) {
+            case SETTINGS_START:
+                break;
+            case SETTINGS_CAL_POINT:
+                if (!(saw_fq_ && saw_cal_short_ && saw_cal_open_ && saw_cal_load_)) {
+                    has_error_ = true;
+                    persistence_logger.warn("didn't see all required elements in calibration point");
+                } else {
+                    state_ = SETTINGS_CAL;
+                    calibration_len_++;
+                }
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("end object found in state ")+state_);
+        }
+    }
+
+    void startDocument() {
+    }
+
+    void endDocument() {
+        if (has_error_) {
+            return;
+        }
+        if (!saw_z0_) {
+            has_error_ = true;
+            persistence_logger.warn("didn't see z0");
+        }
+    }
+
+    void whitespace(char c) {
+    }
+
+    bool has_error_;
+    float z0_;
+    size_t calibration_len_;
+    CalibrationPoint* calibration_results_;
+private:
+    uint8_t state_;
+    size_t max_steps_;
+
+    Complex cal_val_;
+    bool saw_z0_;
+    bool saw_fq_;
+    bool saw_cal_short_;
+    bool saw_cal_open_;
+    bool saw_cal_load_;
+};
+
+enum ResultsListenerState { RESULTS_START, RESULTS_POINT, RESULTS_FQ, RESULTS_Z, RESULTS_Z_R, RESULTS_Z_I };
+
+class ResultsJsonListener : public JsonListener {
+public:
+    ResultsJsonListener(size_t max_steps) {
+        max_steps_ = max_steps;
+        results_ = new AnalysisPoint[max_steps];
+    }
+
+    ~ResultsJsonListener() {
+        delete [] results_;
+    }
+
+    void initialize() {
+        results_len_ = 0;
+        state_ = RESULTS_START;
+    }
+
+    void key(String k) {
+        if(has_error_) {
+            return;
+        }
+        switch(state_) {
+            case RESULTS_POINT:
+                if (k == "fq") {
+                    state_ = RESULTS_FQ;
+                } else if (k =="uncal_z") {
+                    state_ = RESULTS_Z;
+                }
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("key \"")+k+"\" found in state "+state_);
+        }
+    }
+
+    void value(String v) {
+        if(has_error_) {
+            return;
+        }
+        switch(state_) {
+            case RESULTS_FQ:
+                results_[results_len_].fq = atoi(v.c_str());
+                state_ = RESULTS_POINT;
+                saw_fq_ = true;
+                break;
+            case RESULTS_Z_R:
+                results_[results_len_].uncal_z.setReal(atof(v.c_str()));
+                state_ = RESULTS_Z_I;
+                break;
+            case RESULTS_Z_I:
+                results_[results_len_].uncal_z.setImag(atof(v.c_str()));
+                break;
+            case RESULTS_POINT:
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("value \"")+v+"\" found in state "+state_);
+        }
+    }
+
+    void startArray() {
+        if(has_error_) {
+            return;
+        }
+        switch(state_) {
+            case RESULTS_POINT:
+                break;
+            case RESULTS_Z:
+                state_ = RESULTS_Z_R;
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("start array found in state ")+state_);
+        }
+    }
+
+    void endArray() {
+        if(has_error_) {
+            return;
+        }
+        switch(state_) {
+            case RESULTS_START:
+                break;
+            case RESULTS_POINT:
+                break;
+            case RESULTS_Z_I:
+                state_ = RESULTS_POINT;
+                saw_z_ = true;
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("end array found in state ")+state_);
+        }
+    }
+
+    void startObject() {
+        if(has_error_) {
+            return;
+        }
+        switch(state_) {
+            case RESULTS_START:
+                if (results_len_ == max_steps_) {
+                    has_error_ = true;
+                    persistence_logger.warn("too many result points");
+                } else {
+                    state_ = RESULTS_POINT;
+                    saw_fq_ = false;
+                    saw_z_ = false;
+                }
+                break;
+            case RESULTS_POINT:
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("start object found in state ")+state_);
+        }
+    }
+
+    void endObject() {
+        if(has_error_) {
+            return;
+        }
+        switch(state_) {
+            case RESULTS_POINT:
+                if(!(saw_fq_ && saw_z_)) {
+                    has_error_ = true;
+                    persistence_logger.warn("didn't see all required fields in result point");
+                } else {
+                    results_len_++;
+                }
+                break;
+            default:
+                has_error_ = true;
+                persistence_logger.warn(String("end object found in state ")+state_);
+        }
+    }
+
+    void startDocument() {
+    }
+
+    void endDocument() {
+    }
+
+    void whitespace(char c) {
+    }
+
+    size_t results_len_;
+    AnalysisPoint* results_;
+
+    bool has_error_;
+private:
+    uint8_t state_;
+    size_t max_steps_;
+    bool saw_fq_;
+    bool saw_z_;
+};
 
 #define DEFAULT_ANALYZER_PERSISTENCE_NAME "zeroii-analyzer"
 #define SETTINGS_PREFIX "settings_"
@@ -50,50 +391,77 @@ class AnalyzerPersistence {
     public:
     // save named settings
     bool save_settings(const char* name, const Analyzer* analyzer) {
-        DynamicJsonDocument settings_doc(8192);
-        settings_doc["z0"] = analyzer->z0_;
-
-        JsonArray calibration = settings_doc.createNestedArray("calibration");
-        for(size_t i; i<analyzer->calibration_len_; i++) {
-            JsonObject point = calibration.createNestedObject();
-            point["fq"] = analyzer->calibration_results_[i].fq;
-            point["cal_short"] = analyzer->calibration_results_[i].cal_short;
-            point["cal_open"] = analyzer->calibration_results_[i].cal_open;
-            point["cal_load"] = analyzer->calibration_results_[i].cal_load;
-        }
-
         FsFile entry;
         if(!entry.open(&settings_dir_, name, O_WRONLY | O_CREAT | O_TRUNC)) {
-            Serial.println(String("could not open ")+name);
+            persistence_logger.error(String("settings saving could not open ")+name);
             return false;
         }
-        serializeJson(settings_doc, entry);
+
+        entry.write("{\"z0\":");
+        entry.write(analyzer->z0_);
+
+        entry.write(",\"calibration\":[");
+        bool is_first = true;
+        for(size_t i; i<analyzer->calibration_len_; i++) {
+            if(!is_first) {
+                entry.write(",");
+            } else {
+                is_first = false;
+            }
+            entry.write("{\"fq\":");
+            entry.write(analyzer->calibration_results_[i].fq);
+
+            entry.write(",\"cal_short\":[");
+            entry.write(analyzer->calibration_results_[i].cal_short.real());
+            entry.write(",");
+            entry.write(analyzer->calibration_results_[i].cal_short.imag());
+            entry.write("]");
+
+            entry.write(",\"cal_open\":[");
+            entry.write(analyzer->calibration_results_[i].cal_open.real());
+            entry.write(",");
+            entry.write(analyzer->calibration_results_[i].cal_open.imag());
+            entry.write("]");
+
+            entry.write(",\"cal_load\":[");
+            entry.write(analyzer->calibration_results_[i].cal_load.real());
+            entry.write(",");
+            entry.write(analyzer->calibration_results_[i].cal_load.imag());
+            entry.write("]");
+
+            entry.write("}");
+        }
+        entry.write("]");
+        entry.write("}");
+
         entry.close();
+        persistence_logger.info(String("saved settings to ")+name);
         return true;
     }
 
     bool load_settings(FsFile* entry, Analyzer* analyzer, size_t max_cal_len) {
-        DynamicJsonDocument settings_doc(8192);
-        FsFileReader reader(entry);
-        DeserializationError err = deserializeJson(settings_doc, reader);
-        if(err != DeserializationError::Ok) {
-            Serial.println(String("error deserializing settings: ")+err.c_str());
+        JsonStreamingParser parser;
+        SettingsJsonListener listener(max_cal_len);
+        listener.initialize();
+        parser.setListener(&listener);
+
+        char c;
+        while(c = entry->read()) {
+            parser.parse(c);
+        }
+
+        if (listener.has_error_) {
+            persistence_logger.error("failed to load settings");
             return false;
         }
-        analyzer->z0_ = settings_doc["z0"].as<float>();
 
-        JsonArray calibration = settings_doc["calibration"];
-
-        size_t results_to_read = min(calibration.size(), max_cal_len);
-        for (size_t i=0; i<results_to_read; i++) {
-            analyzer->calibration_results_[i].fq = calibration[i]["fq"];
-            analyzer->calibration_results_[i].cal_short = calibration[i]["cal_short"];
-            analyzer->calibration_results_[i].cal_open = calibration[i]["cal_open"];
-            analyzer->calibration_results_[i].cal_load = calibration[i]["cal_load"];
+        analyzer->z0_ = listener.z0_;
+        for(size_t i; i<listener.calibration_len_; i++) {
+            analyzer->calibration_results_[i] = listener.calibration_results_[i];
         }
-        analyzer->calibration_len_ = results_to_read;
+        analyzer->calibration_len_ = listener.calibration_len_;
 
-        Serial.println("loaded settings");
+        persistence_logger.info("loaded settings");
         return true;
     }
 
@@ -113,13 +481,16 @@ class AnalyzerPersistence {
         if(find_latest_file(&settings_dir_, &entry, SETTINGS_PREFIX)) {
             size_t filename_len = entry.getName(filename, sizeof(filename));;
             entry.close();
-            int file_number = str2int(filename+sizeof(SETTINGS_PREFIX), filename_len-sizeof(SETTINGS_PREFIX));
+            persistence_logger.info(String("latest file is ")+filename);
+            persistence_logger.info(String("suffix is \"")+(filename+sizeof(SETTINGS_PREFIX))+("\""));
+            int file_number = str2int(filename+sizeof(SETTINGS_PREFIX)-1, filename_len-sizeof(SETTINGS_PREFIX)+1);
+            persistence_logger.info(String("number is ")+file_number);
             (String(SETTINGS_PREFIX)+(file_number+1)+".json").toCharArray(filename, sizeof(filename));
-            Serial.println(String("saving settings to additional settings file ")+filename);
+            persistence_logger.info(String("saving settings to additional settings file ")+filename);
             return save_settings(filename, analyzer);
         } else {
             (String(SETTINGS_PREFIX)+"0.json").toCharArray(filename, sizeof(filename));
-            Serial.println(String("saving settings to first settings file ")+filename);
+            persistence_logger.info(String("saving settings to first settings file ")+filename);
             return save_settings(filename, analyzer);
         }
     }
@@ -130,51 +501,63 @@ class AnalyzerPersistence {
         if(find_latest_file(&settings_dir_, &entry, SETTINGS_PREFIX)) {
             return load_settings(&entry, analyzer, max_cal_len) && entry.close();
         } else {
-            Serial.println("no settings found");
+            persistence_logger.warn("no settings found");
             return false;
         }
     }
 
     // save named results
     bool save_results(const char* name, const AnalysisPoint* results, const size_t results_len) {
-        DynamicJsonDocument results_doc(8192);
-        JsonArray results_array = results_doc.to<JsonArray>();
-        for(size_t i; i<results_len; i++) {
-            JsonObject point = results_array.createNestedObject();
-            point["fq"] = results[i].fq;
-            point["uncal_z"] = results[i].uncal_z;
-        }
-
         FsFile entry;
         if(!entry.open(&results_dir_, name, O_WRONLY | O_CREAT | O_TRUNC)) {
-            Serial.println(String("could not open ") + name);
+            persistence_logger.error(String("could not open ") + name);
             return false;
         }
-        serializeJson(results_doc, entry);
+
+        entry.write("[");
+        bool is_first = true;
+        for(size_t i; i<results_len; i++) {
+            if(!is_first) {
+                entry.write(",");
+            } else {
+                is_first = false;
+            }
+            entry.write("{\"fq\":");
+            entry.write(results[i].fq);
+
+            entry.write(",\"uncal_z\":[");
+            entry.write(results[i].uncal_z.real());
+            entry.write(",");
+            entry.write(results[i].uncal_z.imag());
+            entry.write("]");
+        }
+        entry.write("]");
+
         entry.close();
         return true;
     }
 
     bool load_results(FsFile* entry, AnalysisPoint* results, size_t *results_len, size_t max_len) {
-        DynamicJsonDocument results_doc(8192);
-        FsFileReader reader(entry);
-        DeserializationError err = deserializeJson(results_doc, reader);
-        if(err != DeserializationError::Ok) {
-            Serial.println(String("error deserializing results: ")+err.c_str());
+        JsonStreamingParser parser;
+        ResultsJsonListener listener(max_len);
+        listener.initialize();
+        parser.setListener(&listener);
+
+        char c;
+        while(c = entry->read()) {
+            parser.parse(c);
+        }
+
+        if(listener.has_error_) {
+            persistence_logger.error("failed to load results");
             return false;
         }
 
-        if (results_doc.size() > max_len) {
-            Serial.println("truncating results");
+        for(size_t i=0; i<listener.results_len_; i++) {
+            results[i] = listener.results_[i];
         }
-        size_t results_to_read = min(results_doc.size(), max_len);
-        for (size_t i=0; i<results_to_read; i++) {
-            results[i].fq = results_doc[i]["fq"].as<uint32_t>();
-            results[i].uncal_z = results_doc[i]["uncal_z"].as<Complex>();
-        }
-
-        *results_len = results_to_read;
-        Serial.println(String("loaded ")+results_to_read+" results");
+        *results_len = listener.results_len_;
+        persistence_logger.info(String("loaded ")+listener.results_len_+" results");
         return true;
     }
 
@@ -182,9 +565,10 @@ class AnalyzerPersistence {
     bool load_results(const char* name, AnalysisPoint* results, size_t *results_len, const size_t max_len) {
         FsFile entry;
         if(!entry.open(&results_dir_, name, O_RDONLY)) {
-            Serial.println(String("could not open results file ") + name);
+            persistence_logger.error(String("could not open results file ") + name);
             return false;
         }
+        persistence_logger.info(String("loaded results from ") + name);
         return load_results(&entry, results, results_len, max_len) && entry.close();
     }
 
@@ -195,13 +579,13 @@ class AnalyzerPersistence {
         if(find_latest_file(&results_dir_, &entry, RESULTS_PREFIX)) {
             size_t filename_len = entry.getName(filename, sizeof(filename));
             entry.close();
-            int file_number = str2int(filename+sizeof(RESULTS_PREFIX), filename_len-sizeof(RESULTS_PREFIX));
+            int file_number = str2int(filename+sizeof(RESULTS_PREFIX)-1, filename_len-sizeof(RESULTS_PREFIX)+1);
             (String(RESULTS_PREFIX)+(file_number+1)+".json").toCharArray(filename, sizeof(filename));
-            Serial.println(String("saving results to additional results file ")+filename);
+            persistence_logger.info(String("saving results to additional results file ")+filename);
             return save_results(filename, results, results_len);
         } else {
             (String(RESULTS_PREFIX)+"0.json").toCharArray(filename, sizeof(filename));
-            Serial.println(String("saving results to first results file ")+filename);
+            persistence_logger.info(String("saving results to first results file ")+filename);
             return save_results(filename, results, results_len);
         }
     }
@@ -212,7 +596,7 @@ class AnalyzerPersistence {
         if(find_latest_file(&results_dir_, &entry, RESULTS_PREFIX)) {
             return load_results(&entry, results, results_len, max_len) && entry.close();
         } else {
-            Serial.println("no results found");
+            persistence_logger.warn("no results found");
             return false;
         }
     }
@@ -221,60 +605,57 @@ class AnalyzerPersistence {
         // check for directory structure
         FsFile root;
         if(!root.open("/")) {
-            Serial.println("could not open root!");
+            persistence_logger.error("could not open root!");
             return false;
         }
-        if(!persistence_root_.open(&root, directory_name)) {
-            if(!persistence_root_.mkdir(&root, directory_name)) {
+        FsFile persistence_root;
+        if(!persistence_root.open(&root, directory_name)) {
+            if(!persistence_root.mkdir(&root, directory_name)) {
                 root.close();
-                Serial.println("could not create persistence directory");
+                persistence_logger.error("could not create persistence directory");
                 return false;
             }
-        } else if(!persistence_root_.isDirectory()) {
+        } else if(!persistence_root.isDirectory()) {
             root.close();
-            persistence_root_.close();
-            Serial.println(String("persistence root ")+directory_name+" exists, but is not a directory!");
+            persistence_root.close();
+            persistence_logger.error(String("persistence root ")+directory_name+" exists, but is not a directory!");
             return false;
         }
         root.close();
 
-        if(!settings_dir_.open(&persistence_root_, "settings")) {
-            if(!settings_dir_.mkdir(&persistence_root_, "settings")) {
-                Serial.println("could not create settings dir!");
+        if(!settings_dir_.open(&persistence_root, "settings")) {
+            if(!settings_dir_.mkdir(&persistence_root, "settings")) {
+                persistence_logger.error("could not create settings dir!");
                 return false;
             }
         } else if(!settings_dir_.isDirectory()) {
             settings_dir_.close();
-            Serial.println("settings dir exists, but is not a directory!");
+            persistence_logger.error("settings dir exists, but is not a directory!");
             return false;
         }
 
-        if(!results_dir_.open(&persistence_root_, "results")) {
-            if(!results_dir_.mkdir(&persistence_root_, "results")) {
-                Serial.println("could not create results dir!");
+        if(!results_dir_.open(&persistence_root, "results")) {
+            if(!results_dir_.mkdir(&persistence_root, "results")) {
+                persistence_logger.error("could not create results dir!");
                 return false;
             }
         } else if(!results_dir_.isDirectory()) {
             results_dir_.close();
-            Serial.println("results dir exists, but is not a directory!");
+            persistence_logger.error("results dir exists, but is not a directory!");
             return false;
         }
 
-        if(!persistence_root_.isOpen()) {
-            Serial.println("persistence root is not open");
-        }
+        persistence_root.close();
         if(!settings_dir_.isOpen()) {
-            Serial.println("settings dir is not open");
+            persistence_logger.error("settings dir is not open");
         }
         if(!results_dir_.isOpen()) {
-            Serial.println("results dir is not open");
+            persistence_logger.error("results dir is not open");
         }
 
         return true;
     }
 
-
-    FsFile persistence_root_;
     FsFile settings_dir_;
     FsFile results_dir_;
 
@@ -322,7 +703,7 @@ class AnalyzerPersistence {
             if(!entry->open(directory, max_filename, O_RDONLY)) {
                 char dirname[128];
                 directory->getName(dirname, 128);
-                Serial.println(String("could not open ")+max_filename+" in "+dirname);
+                persistence_logger.error(String("could not open ")+max_filename+" in "+dirname);
                 return false;
             }
             return true;
@@ -330,7 +711,6 @@ class AnalyzerPersistence {
             return false;
         }
     }
-
 };
 
 #endif //_SETTINGS_H

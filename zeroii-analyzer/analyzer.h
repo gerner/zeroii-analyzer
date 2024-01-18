@@ -4,6 +4,10 @@
 #include <algorithm>
 #include "Complex.h"
 
+#include "log.h"
+
+Logger analysis_logger("analysis");
+
 Complex compute_gamma(const Complex z, const float z0_real) {
     // gamma = (z - z0) / (z + z0)
     // z = r + xj
@@ -51,6 +55,7 @@ struct AnalysisPoint {
     Complex uncal_z;
 
     AnalysisPoint(): fq(0) {}
+    AnalysisPoint(const AnalysisPoint &p): fq(p.fq), uncal_z(p.uncal_z) {}
     AnalysisPoint(uint32_t a_fq, Complex a_uncal_z) : fq(a_fq), uncal_z(a_uncal_z) {}
 
     static const size_t data_size = sizeof(uint32_t)+sizeof(Complex);
@@ -71,6 +76,13 @@ struct AnalysisPoint {
 
 struct CalibrationPoint {
     CalibrationPoint() {
+    }
+
+    CalibrationPoint(const CalibrationPoint &p) {
+        fq = p.fq;
+        cal_short = p.cal_short;
+        cal_open = p.cal_open;
+        cal_load = p.cal_load;
     }
 
     CalibrationPoint(uint32_t f, Complex s, Complex o, Complex l) {
@@ -101,15 +113,12 @@ class Analyzer {
         }
 
         Complex uncalibrated_measure(uint32_t fq) {
-            Serial.println("starting to measure");
             zeroii_.startMeasure(fq);
-            Serial.println("start returned");
-            Serial.flush();
 
             float R = zeroii_.getR();
             float X = zeroii_.getX();
 
-            Serial.println(String("")+R+" + "+X+" i");
+            analysis_logger.debug(String("")+R+" + "+X+" i");
 
             return Complex(R, X);
         }

@@ -13,12 +13,12 @@ struct MenuOption {
         sub_menu = sm;
     }
     String label;
-    uint16_t option_id;
+    uint8_t option_id;
     Menu* sub_menu;
 };
 
 struct Menu {
-    Menu(Menu* p, MenuOption* o, size_t o_count) {
+    Menu(Menu* p, const MenuOption* o, size_t o_count) {
         parent = p;
         options = o;
         option_count = o_count;
@@ -33,7 +33,7 @@ struct Menu {
     }
 
     Menu* parent;
-    MenuOption* options;
+    const MenuOption* options;
     size_t option_count;
     size_t selected_option;
 };
@@ -70,7 +70,7 @@ class MenuManager {
 
         void expand() {
             assert(current_menu_->selected_option < current_menu_->option_count);
-            MenuOption* current_option = &(current_menu_->options[current_menu_->selected_option]);
+            const MenuOption* current_option = &(current_menu_->options[current_menu_->selected_option]);
             if (current_option_ >= 0) {
                 return;
             }
@@ -97,7 +97,7 @@ class MenuManager {
 
         Menu* root_menu_;
         Menu* current_menu_;
-        int32_t current_option_;
+        int16_t current_option_;
 
     private:
         bool select_option(Menu* m, uint16_t option_id) {

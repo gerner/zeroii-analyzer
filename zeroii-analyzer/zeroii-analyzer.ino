@@ -7,7 +7,6 @@
 
 #include <SPI.h>
 #include <SdFat.h>
-#include <ArduinoJson.h>
 
 #include "RTClib.h"
 
@@ -17,7 +16,7 @@
 #include "menu_manager.h"
 #include "persistence.h"
 
-#define WAIT_FOR_SERIAL 0
+#define WAIT_FOR_SERIAL 1
 
 #define VBATT_ALPHA 0.05
 #define BATT_SENSE_PIN A3
@@ -157,51 +156,6 @@ void draw_progress_meter(size_t total, size_t current) {
     tft.print(total);
 }
 
-class AnalysisProcessor {
-    public:
-    void initialize(uint32_t start_fq, uint32_t end_fq, uint16_t steps, AnalysisPoint* results) {
-        fq_ = start_fq;
-        steps_ = steps;
-        step_fq_ = (end_fq - start_fq)/steps;
-        results_ = results;
-        result_idx_ = 0;
-
-        Serial.println(String("analyzing startFq ")+start_fq+" endFq "+end_fq+" steps "+steps);
-        tft.fillScreen(BLACK);
-        draw_title();
-        initialize_progress_meter("Analyzing...");
-    }
-
-    bool analyze() {
-        if (result_idx_ >= steps_) {
-            return true;
-        }
-
-        Serial.println(String("analyzing fq ")+fq_);
-        Complex z = analyzer.uncalibrated_measure(fq_);
-        Serial.println("putting into results array");
-        Serial.flush();
-        results_[result_idx_] = AnalysisPoint(fq_, z);
-        fq_ += step_fq_;
-        result_idx_++;
-
-        // update progress meter
-        draw_progress_meter(steps_, result_idx_);
-
-        return false;
-    }
-
-
-    private:
-    uint32_t fq_;
-    uint32_t step_fq_;
-    AnalysisPoint* results_;
-    size_t steps_;
-    size_t result_idx_;
-};
-
-AnalysisProcessor analysis_processor;
-
 RTC_DS3231 rtc;
 
 // Call back for file timestamps.  Only called for file create and sync().
@@ -250,40 +204,40 @@ enum MOPT {
     MOPT_BACK,
 };
 
-MenuOption fq_menu_options[] = {
-    MenuOption("Fq Start", MOPT_FQSTART, NULL),
-    MenuOption("Fq End", MOPT_FQEND, NULL),
-    MenuOption("Fq Center", MOPT_FQCENTER, NULL),
-    MenuOption("Fq Range", MOPT_FQWINDOW, NULL),
-    MenuOption("Fq Band", MOPT_FQBAND, NULL),
-    MenuOption("Steps", MOPT_FQSTEPS, NULL),
-    MenuOption("Back", MOPT_BACK, NULL),
+const MenuOption fq_menu_options[] = {
+    MenuOption(F("Fq Start"), MOPT_FQSTART, NULL),
+    MenuOption(F("Fq End"), MOPT_FQEND, NULL),
+    MenuOption(F("Fq Center"), MOPT_FQCENTER, NULL),
+    MenuOption(F("Fq Range"), MOPT_FQWINDOW, NULL),
+    MenuOption(F("Fq Band"), MOPT_FQBAND, NULL),
+    MenuOption(F("Steps"), MOPT_FQSTEPS, NULL),
+    MenuOption(F("Back"), MOPT_BACK, NULL),
 };
 Menu fq_menu(NULL, fq_menu_options, sizeof(fq_menu_options)/sizeof(fq_menu_options[0]));
 
-MenuOption results_menu_options[] {
-    MenuOption("SWR graph", MOPT_SWR, NULL),
-    MenuOption("Smith chart", MOPT_SMITH, NULL),
-    MenuOption("Save Results", MOPT_SAVE_RESULTS, NULL),
-    MenuOption("Load Results", MOPT_LOAD_RESULTS, NULL),
-    MenuOption("Back", MOPT_BACK, NULL),
+const MenuOption results_menu_options[] {
+    MenuOption(F("SWR graph"), MOPT_SWR, NULL),
+    MenuOption(F("Smith chart"), MOPT_SMITH, NULL),
+    MenuOption(F("Save Results"), MOPT_SAVE_RESULTS, NULL),
+    MenuOption(F("Load Results"), MOPT_LOAD_RESULTS, NULL),
+    MenuOption(F("Back"), MOPT_BACK, NULL),
 };
 Menu results_menu(NULL, results_menu_options, sizeof(results_menu_options)/sizeof(results_menu_options[0]));
 
-MenuOption settings_menu_options[] = {
-    MenuOption("Calibration", MOPT_CALIBRATE, NULL),
-    MenuOption("Z0", MOPT_Z0, NULL),
-    MenuOption("Save Settings", MOPT_SAVE_SETTINGS, NULL),
-    MenuOption("Load Settings", MOPT_LOAD_SETTINGS, NULL),
-    MenuOption("Back", MOPT_BACK, NULL),
+const MenuOption settings_menu_options[] = {
+    MenuOption(F("Calibration"), MOPT_CALIBRATE, NULL),
+    MenuOption(F("Z0"), MOPT_Z0, NULL),
+    MenuOption(F("Save Settings"), MOPT_SAVE_SETTINGS, NULL),
+    MenuOption(F("Load Settings"), MOPT_LOAD_SETTINGS, NULL),
+    MenuOption(F("Back"), MOPT_BACK, NULL),
 };
 Menu settings_menu(NULL, settings_menu_options, sizeof(settings_menu_options)/sizeof(settings_menu_options[0]));
 
-MenuOption root_menu_options[] = {
-    MenuOption("Analyze", MOPT_ANALYZE, NULL),
-    MenuOption("Frequencies", MOPT_FQ, &fq_menu),
-    MenuOption("Results", MOPT_RESULTS, &results_menu),
-    MenuOption("Settings", MOPT_SETTINGS, &settings_menu),
+const MenuOption root_menu_options[] = {
+    MenuOption(F("Analyze"), MOPT_ANALYZE, NULL),
+    MenuOption(F("Frequencies"), MOPT_FQ, &fq_menu),
+    MenuOption(F("Results"), MOPT_RESULTS, &results_menu),
+    MenuOption(F("Settings"), MOPT_SETTINGS, &settings_menu),
 };
 Menu root_menu(NULL, root_menu_options, sizeof(root_menu_options)/sizeof(root_menu_options[0]));
 
@@ -292,125 +246,6 @@ MenuManager menu_manager(&root_menu);
 uint32_t startFq = 28300000;
 uint32_t endFq = 28500000;
 uint16_t dotsNumber = 100;
-
-
-enum CAL_STEP { CAL_START, CAL_S_START, CAL_S, CAL_O_START, CAL_O, CAL_L_START, CAL_L, CAL_END };
-
-class Calibrator {
-    public:
-    Calibrator(Analyzer* analyzer) {
-        analyzer_ = analyzer;
-    }
-    void initialize(uint32_t start_fq, uint32_t end_fq, uint16_t steps, CalibrationPoint* results) {
-        calibration_state_ = CAL_START;
-        start_fq_ = start_fq;
-        end_fq_ = end_fq;
-        fq_ = start_fq;
-        steps_ = steps;
-        step_fq_ = (end_fq - start_fq)/steps;
-        results_ = results;
-        result_idx_ = 0;
-
-        Serial.println(String("calibrating startFq ")+start_fq+" endFq "+end_fq+" steps "+steps+" step_fq "+step_fq_);
-        tft.fillScreen(BLACK);
-        draw_title();
-    }
-    bool calibration_step() {
-        switch(calibration_state_) {
-            case CAL_START:
-                tft.setTextSize(2);
-                tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
-                tft.setCursor(0, 7*2*8);
-                tft.println("connect short and press knob");
-                calibration_state_ = CAL_S_START;
-                break;
-            // all three "start" cases are the same
-            // just increment the state on click
-            case CAL_S_START:
-            case CAL_O_START:
-            case CAL_L_START:
-                if (click) {
-                    Serial.print("calibration start state ");
-                    Serial.println(calibration_state_);
-                    calibration_state_++;
-                    fq_ = start_fq_;
-                    result_idx_ = 0;
-                    initialize_progress_meter("Calibrating...");
-                }
-                break;
-            case CAL_S:
-                if(fq_ <= end_fq_) {
-                    Serial.print("calibrating short fq: ");
-                    Serial.println(fq_);
-                    results_[result_idx_].cal_short = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
-                    results_[result_idx_].fq = fq_;
-                    result_idx_++;
-                    fq_ += step_fq_;
-                    draw_progress_meter(steps_, result_idx_);
-                } else {
-                    Serial.println("done calibrating short.");
-                    tft.setTextSize(2);
-                    tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
-                    tft.setCursor(0, 6*2*8);
-                    tft.println("connect open and press knob");
-                    calibration_state_ = CAL_O_START;
-                }
-                break;
-            case CAL_O:
-                if(fq_ <= end_fq_) {
-                    Serial.print("calibrating open fq: ");
-                    Serial.println(fq_);
-                    results_[result_idx_].cal_open = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
-                    result_idx_++;
-                    fq_ += step_fq_;
-                    draw_progress_meter(steps_, result_idx_);
-                } else {
-                    Serial.println("done calibrating open.");
-                    tft.setTextSize(2);
-                    tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
-                    tft.setCursor(0, 6*2*8);
-                    tft.println("connect load and press knob");
-                    calibration_state_ = CAL_L_START;
-                }
-                break;
-            case CAL_L:
-                if(fq_ <= end_fq_) {
-                    Serial.print("calibrating load fq: ");
-                    Serial.println(fq_);
-                    results_[result_idx_].cal_load = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
-                    result_idx_++;
-                    fq_ += step_fq_;
-                    draw_progress_meter(steps_, result_idx_);
-                } else {
-                    Serial.println("done calibrating load.");
-                    tft.setTextSize(2);
-                    tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
-                    tft.setCursor(0, 6*2*8);
-                    tft.println("done calibrating.");
-                    calibration_state_ = CAL_END;
-                    // we're done!
-                    return true;
-                }
-                break;
-        }
-        return false;
-    }
-
-    private:
-    Analyzer* analyzer_;
-    uint8_t calibration_state_;
-
-    uint32_t start_fq_;
-    uint32_t end_fq_;
-
-    uint32_t fq_;
-    uint32_t step_fq_;
-    CalibrationPoint* results_;
-    size_t steps_;
-    size_t result_idx_;
-};
-
-Calibrator calibrator(&analyzer);
 
 void draw_title() {
     tft.fillRect(0, 0, tft.width(), 8*TITLE_TEXT_SIZE, BLACK);
@@ -428,7 +263,7 @@ void draw_title() {
 
 uint32_t last_error_print = 0;
 uint32_t last_error_time = 0;
-char error_message[128];
+char error_message[64];
 
 void clear_error_display() {
     current_error("");
@@ -510,7 +345,6 @@ void draw_menu(Menu* current_menu, int current_option, bool fresh=true, int16_t 
     }
 }
 
-
 void menu_back() {
     leave_option(menu_manager.current_option_);
     clear_menu(menu_manager.current_menu_);
@@ -573,276 +407,23 @@ String frequency_parts_formatter(const uint32_t fq) {
     return String(buf);
 }
 
-enum FQ_SETTING_STATE { FQ_SETTING_START, FQ_SETTING_GHZ, FQ_SETTING_MHZ, FQ_SETTING_KHZ, FQ_SETTING_HZ, FQ_SETTING_END };
+/*************
+ * A set of state machines to handle different kinds of activities that cross
+ * loop invocations.
+ ************/
+#include "process.h"
+AnalysisProcessor* analysis_processor = NULL;
+Calibrator* calibrator = NULL;
+FqSetter* fq_setter = NULL;
+BandSetter* band_setter = NULL;
+FileBrowser* file_browser = NULL;
+ConfirmDialog* confirm_dialog = NULL;
 
-class FqSetter {
-    public:
-        void initialize(const uint32_t fq) {
-            fq_state_ = FQ_SETTING_START;
-            fq_ = fq;
-        }
-
-        String frequency_parts_indicator() const {
-            switch(fq_state_) {
-                case FQ_SETTING_GHZ: return String("    ^");
-                case FQ_SETTING_MHZ: return String("      ^^^");
-                case FQ_SETTING_KHZ: return String("          ^^^");
-                case FQ_SETTING_HZ:  return String("              ^^^");
-            }
-        }
-
-        void draw_fq_setting(const String label) const {
-            tft.setTextSize(3);
-            tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
-            tft.setCursor(0, 6*2*8);
-            tft.print("    ");
-            tft.println(frequency_parts_formatter(fq_));
-            tft.println(frequency_parts_indicator());
-        }
-
-        uint32_t set_fq_value(const uint32_t min_fq, const uint32_t max_fq, const String label) {
-            // clicking advances through fields in the fq (GHz, MHz, ...) or sets the value
-            if (click) {
-                if (fq_state_ == FQ_SETTING_HZ) {
-                    tft.fillScreen(BLACK);
-                    draw_title();
-                    menu_back();
-                    fq_state_ = FQ_SETTING_END;
-                    return fq_;
-                } else {
-                    fq_state_++;
-                    draw_fq_setting(label);
-                    return fq_;
-                }
-            } else if (fq_state_ == FQ_SETTING_START) {
-                fq_state_ = FQ_SETTING_GHZ;
-                tft.fillRect(0, 5*2*8, tft.width(), 3*8*3, BLACK);
-                tft.setCursor(0, 5*2*8);
-                tft.print(label);
-                tft.println(":");
-                draw_fq_setting(label);
-                return fq_;
-            } else if (turn != 0) {
-                // rotating changes value
-                int32_t inc = 1ul;
-                switch(fq_state_) {
-                    case FQ_SETTING_GHZ: inc = 1ul * 1000 * 1000 * 1000; break;
-                    case FQ_SETTING_MHZ: inc = 1ul * 1000 * 1000; break;
-                    case FQ_SETTING_KHZ: inc = 1ul * 1000; break;
-                }
-                if (fq_state_ != FQ_SETTING_GHZ) {
-                    // inc scales with how fast you're turning it
-                    // inc is direction * 2 ^ speed / 10
-                    //inc = (uint32_t(1) << (uint32_t(encoder.speed()/2))) * inc;
-                } //k else just inc by 1GHz to avoid overflow
-                fq_ = constrain(fq_ + turn * inc, min_fq, max_fq);
-                draw_fq_setting(label);
-                return fq_;
-            } else {
-                return fq_;
-            }
-        }
-
-        uint32_t fq() const { return fq_; }
-    private:
-        uint8_t fq_state_;
-        uint32_t fq_;
-};
-
-FqSetter fq_setter;
-
-uint32_t band_fqs[][2] = { {135700, 137800}, {472000, 479000}, {1800000, 2000000}, {3500000, 4000000}, {5330500, 5406400}, {7000000, 7300000}, {10100000, 10150000}, {14000000, 14350000}, {18068000, 18168000}, {2100000, 21450000}, {24890000, 24990000}, {28000000, 29700000}, {50000000, 54000000}, {144000000, 148000000}, {219000000, 225000000}, {420000000, 450000000}, {902000000, 928000000}, {100000, 600000000} };
-String band_names[] = {"2200m", "630m", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "VHF", "1.25m", "UHF", "33cm", "Reference RF"};
-class BandSetter {
-    public:
-    void initialize() {
-        band_idx_ = 0;
-        tft.fillScreen(BLACK);
-        draw_title();
-        tft.setCursor(0, 5*2*8);
-        tft.println("Band:");
-        draw_band_setting();
-    }
-    bool set_band() {
-        if (click) {
-            return true;
-        } else if (turn != 0) {
-            band_idx_ = constrain((int32_t)band_idx_+turn, 0, sizeof(band_names)/sizeof(band_names[0])-1);
-            draw_band_setting();
-        }
-        return false;
-    }
-    void draw_band_setting() {
-        tft.setTextSize(3);
-        tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
-        tft.setCursor(0, 6*2*8);
-        tft.print("    ");
-        tft.println(band_names[band_idx_]);
-    }
-
-    void band(uint32_t* start_fq, uint32_t* end_fq) {
-        *start_fq = band_fqs[band_idx_][0];
-        *end_fq = band_fqs[band_idx_][1];
-    }
-    private:
-        size_t band_idx_;
-};
-
-BandSetter band_setter;
-
-class FileBrowser {
-    public:
-    FileBrowser() : file_menu_(NULL), file_options_(NULL) {}
-
-    ~FileBrowser() {
-        if (file_menu_) {
-            delete file_menu_;
-            delete [] file_options_;
-        }
-    }
-
-    bool initialize(FsFile* directory, bool with_new) {
-        Serial.println("initializing file browser");
-        Serial.flush();
-
-        tft.fillScreen(BLACK);
-        draw_title();
-
-        if(!directory->isOpen() || !directory->isDirectory()) {
-            return false;
-        }
-        if (file_menu_) {
-            delete file_menu_;
-            delete [] file_options_;
-        }
-
-        with_new_ = with_new;
-
-        Serial.println("counting files in directory");
-        Serial.flush();
-
-        // awkward to iterate through directory once to get count and a second
-        // time to actually get the names into the array. not sure how else to
-        // do it with an array of MenuOptions (no stl shenanigans)
-        size_t file_count = 0;
-        directory->rewindDirectory();
-        FsFile entry;
-        while(entry.openNext(directory, O_RDONLY)) {
-            file_count++;
-        }
-
-        Serial.println("allocating file options");
-        Serial.flush();
-
-        size_t idx;
-        if (with_new_) {
-            file_count++;
-            file_options_ = new MenuOption[file_count];
-            file_options_[0].label = String("New File");
-            idx = 1;
-        } else {
-            file_options_ = new MenuOption[file_count];
-            idx = 0;
-        }
-
-        Serial.println("iterating through directory");
-        Serial.flush();
-
-        directory->rewindDirectory();
-        while(entry.openNext(directory, O_RDONLY) && idx < file_count) {
-            char filename[128];
-            entry.getName(filename, sizeof(filename));
-            file_options_[idx++].label = String(filename);
-        }
-
-        file_menu_ = new Menu(NULL, file_options_, file_count);
-
-        Serial.println("drawing menu");
-        Serial.flush();
-
-        draw_menu(file_menu_, -1, true);
-        return true;
-    }
-
-    bool choose_file() {
-        if (click) {
-            return true;
-        } else if (turn != 0) {
-            file_menu_->selected_option = constrain((int32_t)file_menu_->selected_option+turn, 0, file_menu_->option_count);
-            draw_menu(file_menu_, -1, false);
-            return false;
-        } else {
-            return false;
-        }
-    }
-
-    bool is_new() {
-        return with_new_ && file_menu_->selected_option == 0;
-    }
-
-    void file(char* filename, size_t max_len) {
-        file_options_[file_menu_->selected_option].label.toCharArray(filename, max_len);
-    }
-
-    private:
-    bool with_new_;
-    MenuOption* file_options_;
-    Menu* file_menu_;
-};
-FileBrowser file_browser;
+GraphContext* graph_context = NULL;
 
 bool browse_progress() {
-    return file_browser.choose_file();
+    return file_browser->choose_file();
 }
-
-typedef bool (*ProgressFn)(void);
-
-MenuOption confirmation_menu_options[] = {
-    MenuOption("Yes", 0, NULL),
-    MenuOption("Cancel", 0, NULL),
-};
-Menu confirmation_menu(NULL, confirmation_menu_options, sizeof(confirmation_menu_options)/sizeof(confirmation_menu_options[0]));
-
-class ConfirmDialog {
-    public:
-    void initialize(ProgressFn progress_fn) {
-        confirmation_menu.selected_option = 0;
-        progress_fn_ = progress_fn;
-        progress_ = true;
-    }
-
-    bool progress() {
-        if (progress_) {
-            if(progress_fn_()) {
-                Serial.println("inner progress fn returned true, proceeding with confirmation.");
-                progress_ = false;
-                tft.fillScreen(BLACK);
-                tft.setCursor(CONFIRM_ORIG_X-6*TITLE_TEXT_SIZE, CONFIRM_ORIG_Y-8*TITLE_TEXT_SIZE);
-                tft.print("Are you sure?");
-                draw_title();
-                draw_menu(&confirmation_menu, -1, true, CONFIRM_ORIG_X, CONFIRM_ORIG_Y);
-            }
-        } else {
-            if(click) {
-                return true;
-            } else if(turn != 0) {
-                confirmation_menu.selected_option = constrain((int32_t)confirmation_menu.selected_option+turn, 0, confirmation_menu.option_count);
-                draw_menu(&confirmation_menu, -1, false, CONFIRM_ORIG_X, CONFIRM_ORIG_Y);
-            }
-        }
-        return false;
-    }
-
-    bool confirm() {
-        return !progress_ && confirmation_menu.selected_option == 0;
-    }
-
-    private:
-    bool progress_;
-    ProgressFn progress_fn_;
-};
-
-ConfirmDialog confirm_dialog;
 
 void analyze(uint32_t startFq, uint32_t endFq, uint16_t dotsNumber, AnalysisPoint* results) {
     uint32_t fq = startFq;
@@ -865,54 +446,80 @@ void enter_option(int32_t option_id) {
     switch(option_id) {
         case MOPT_ANALYZE:
             analysis_results_len = dotsNumber;
-            analysis_processor.initialize(startFq, endFq, dotsNumber, analysis_results);
+            analysis_processor = new AnalysisProcessor();
+            analysis_processor->initialize(startFq, endFq, dotsNumber, analysis_results);
             break;
         case MOPT_FQCENTER: {
             int32_t centerFq = startFq + (endFq-startFq)/2;
-            fq_setter.initialize(centerFq);
+            fq_setter = new FqSetter();
+            fq_setter->initialize(centerFq);
             break;
         }
         case MOPT_FQWINDOW: {
             int32_t rangeFq = endFq - startFq;
-            fq_setter.initialize(rangeFq);
+            fq_setter = new FqSetter();
+            fq_setter->initialize(rangeFq);
             break;
         }
-        case MOPT_FQSTART: fq_setter.initialize(startFq); break;
-        case MOPT_FQEND: fq_setter.initialize(endFq); break;
-        case MOPT_FQBAND: band_setter.initialize(); break;
+        case MOPT_FQSTART: {
+            fq_setter = new FqSetter();
+            fq_setter->initialize(startFq);
+            break;
+        }
+        case MOPT_FQEND: {
+            fq_setter = new FqSetter();
+            fq_setter->initialize(endFq);
+            break;
+        }
+        case MOPT_FQBAND:
+            band_setter = new BandSetter();
+            band_setter->initialize();
+            break;
         case MOPT_CALIBRATE:
             calibration_len = dotsNumber;
-            calibrator.initialize(startFq, endFq, dotsNumber, calibration_results);
+            calibrator = new Calibrator(&analyzer);
+            calibrator->initialize(startFq, endFq, dotsNumber, calibration_results);
             break;
         case MOPT_SWR: {
             swr_i = 0;
-            graph_swr(analysis_results, analysis_results_len, &analyzer);
-            draw_swr_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
-            draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+            graph_context = new GraphContext();
+            graph_context->graph_swr(analysis_results, analysis_results_len, &analyzer);
+            graph_context->draw_swr_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
+            graph_context->draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             break;
         }
         case MOPT_SMITH: {
             swr_i = 0;
-            graph_smith(analysis_results, analysis_results_len, &analyzer);
-            draw_smith_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
-            draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+
+            graph_context = new GraphContext();
+            graph_context->graph_smith(analysis_results, analysis_results_len, &analyzer);
+            graph_context->draw_smith_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
+            graph_context->draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             break;
         }
         case MOPT_SAVE_RESULTS:
-            file_browser.initialize(&persistence.results_dir_, true);
-            confirm_dialog.initialize(&browse_progress);
+            file_browser = new FileBrowser();
+            file_browser->initialize(&persistence.results_dir_, true);
+            confirm_dialog = new ConfirmDialog();
+            confirm_dialog->initialize(&browse_progress);
             break;
         case MOPT_LOAD_RESULTS:
-            file_browser.initialize(&persistence.results_dir_, false);
-            confirm_dialog.initialize(&browse_progress);
+            file_browser = new FileBrowser();
+            file_browser->initialize(&persistence.results_dir_, false);
+            confirm_dialog = new ConfirmDialog();
+            confirm_dialog->initialize(&browse_progress);
             break;
         case MOPT_SAVE_SETTINGS:
-            file_browser.initialize(&persistence.settings_dir_, true);
-            confirm_dialog.initialize(&browse_progress);
+            file_browser = new FileBrowser();
+            file_browser->initialize(&persistence.settings_dir_, true);
+            confirm_dialog = new ConfirmDialog();
+            confirm_dialog->initialize(&browse_progress);
             break;
         case MOPT_LOAD_SETTINGS:
-            file_browser.initialize(&persistence.settings_dir_, false);
-            confirm_dialog.initialize(&browse_progress);
+            file_browser = new FileBrowser();
+            file_browser->initialize(&persistence.settings_dir_, false);
+            confirm_dialog = new ConfirmDialog();
+            confirm_dialog->initialize(&browse_progress);
             break;
     }
 }
@@ -920,62 +527,76 @@ void enter_option(int32_t option_id) {
 void leave_option(int32_t option_id) {
     switch(option_id) {
         case MOPT_FQCENTER:
-            Serial.println(String("setting center fq to: ") + fq_setter.fq());
+            Serial.println(String("setting center fq to: ") + fq_setter->fq());
             // move [startFq, endFq] so it's centered on desired value
-            startFq = constrain(fq_setter.fq() - (endFq - startFq)/2, MIN_FQ, MAX_FQ);
-            endFq = constrain(fq_setter.fq() + (endFq - startFq)/2, MIN_FQ, MAX_FQ);
+            startFq = constrain(fq_setter->fq() - (endFq - startFq)/2, MIN_FQ, MAX_FQ);
+            endFq = constrain(fq_setter->fq() + (endFq - startFq)/2, MIN_FQ, MAX_FQ);
+            delete fq_setter;
+            fq_setter = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_FQWINDOW: {
-            Serial.println(String("setting window fq to: ") + fq_setter.fq());
+            Serial.println(String("setting window fq to: ") + fq_setter->fq());
             // narrow/expand [startFq, endFq] remaining centered
             int32_t cntFq = startFq + (endFq - startFq)/2;
-            startFq = constrain(cntFq - fq_setter.fq()/2, MIN_FQ, MAX_FQ);
-            endFq = constrain(cntFq + fq_setter.fq()/2, MIN_FQ, MAX_FQ);
+            startFq = constrain(cntFq - fq_setter->fq()/2, MIN_FQ, MAX_FQ);
+            endFq = constrain(cntFq + fq_setter->fq()/2, MIN_FQ, MAX_FQ);
+            delete fq_setter;
+            fq_setter = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         }
         case MOPT_FQSTART:
-            Serial.println(String("setting start fq to: ") + fq_setter.fq());
-            startFq = fq_setter.fq();
+            Serial.println(String("setting start fq to: ") + fq_setter->fq());
+            startFq = fq_setter->fq();
             endFq = constrain(endFq, startFq+1, MAX_FQ);
+            delete fq_setter;
+            fq_setter = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_FQEND:
-            Serial.println(String("setting end fq to: ") + fq_setter.fq());
-            endFq = fq_setter.fq();
+            Serial.println(String("setting end fq to: ") + fq_setter->fq());
+            endFq = fq_setter->fq();
             startFq = constrain(startFq, MIN_FQ, endFq-1);
+            delete fq_setter;
+            fq_setter = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_FQBAND:
-            band_setter.band(&startFq, &endFq);
+            band_setter->band(&startFq, &endFq);
             Serial.println(String("setting start/end to: ") + startFq + "/" + endFq);
+            delete band_setter;
+            band_setter = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_ANALYZE:
+            delete analysis_processor;
+            analysis_processor = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_CALIBRATE:
+            delete calibrator;
+            calibrator = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             analyzer.calibration_len_ = calibration_len;
             break;
         case MOPT_SAVE_RESULTS:
-            if(confirm_dialog.confirm()) {
-                if(file_browser.is_new()) {
+            if(confirm_dialog->confirm()) {
+                if(file_browser->is_new()) {
                     if(!persistence.save_results(analysis_results, analysis_results_len)) {
                         Serial.println("could not save results");
                         current_error("could not save results");
                     }
                 } else {
                     char filename[128];
-                    file_browser.file(filename, sizeof(filename));
+                    file_browser->file(filename, sizeof(filename));
                     if(!persistence.save_results(filename, analysis_results, analysis_results_len)) {
                         Serial.println("could not save results");
                         current_error("could not save results");
@@ -985,13 +606,17 @@ void leave_option(int32_t option_id) {
                 Serial.println("cancelled saving results");
                 current_error("cancelled saving results");
             }
+            delete file_browser;
+            file_browser = NULL;
+            delete confirm_dialog;
+            confirm_dialog = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_LOAD_RESULTS:
-            if(confirm_dialog.confirm()) {
+            if(confirm_dialog->confirm()) {
                 char filename[128];
-                file_browser.file(filename, sizeof(filename));
+                file_browser->file(filename, sizeof(filename));
                 if(!persistence.load_results(filename, analysis_results, &analysis_results_len, MAX_STEPS)) {
                     Serial.println("could not load results");
                     current_error("could not load results");
@@ -1000,19 +625,23 @@ void leave_option(int32_t option_id) {
                 Serial.println("cancelled loading results");
                 current_error("cancelled loading results");
             }
+            delete file_browser;
+            file_browser = NULL;
+            delete confirm_dialog;
+            confirm_dialog = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_SAVE_SETTINGS:
-            if(confirm_dialog.confirm()) {
-                if(file_browser.is_new()) {
+            if(confirm_dialog->confirm()) {
+                if(file_browser->is_new()) {
                     if(!persistence.save_settings(&analyzer)) {
                         Serial.println("could not save settings");
                         current_error("could not save settings");
                     }
                 } else {
                     char filename[128];
-                    file_browser.file(filename, sizeof(filename));
+                    file_browser->file(filename, sizeof(filename));
                     if(!persistence.save_settings(filename, &analyzer)) {
                         Serial.println("could not save settings");
                         current_error("could not save settings");
@@ -1022,13 +651,17 @@ void leave_option(int32_t option_id) {
                 Serial.println("cancelled saving settings");
                 current_error("cancelled saving settings");
             }
+            delete file_browser;
+            file_browser = NULL;
+            delete confirm_dialog;
+            confirm_dialog = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_LOAD_SETTINGS:
-            if(confirm_dialog.confirm()) {
+            if(confirm_dialog->confirm()) {
                 char filename[128];
-                file_browser.file(filename, sizeof(filename));
+                file_browser->file(filename, sizeof(filename));
                 if(!persistence.load_settings(filename, &analyzer, MAX_STEPS)) {
                     Serial.println("could not load settings");
                     current_error("could not load settings");
@@ -1037,14 +670,22 @@ void leave_option(int32_t option_id) {
                 Serial.println("cancelled loading settings");
                 current_error("cancelled loading settings");
             }
+            delete file_browser;
+            file_browser = NULL;
+            delete confirm_dialog;
+            confirm_dialog = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_SWR:
+            delete graph_context;
+            graph_context = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_SMITH:
+            delete graph_context;
+            graph_context = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
@@ -1077,7 +718,7 @@ void handle_option() {
             menu_back();
             break;
         case MOPT_ANALYZE:
-            if (analysis_processor.analyze()) {
+            if (analysis_processor->analyze()) {
                 menu_back();
                 if(!menu_manager.select_option(MOPT_SWR)) {
                     Serial.println("could not find SWR option");
@@ -1093,8 +734,8 @@ void handle_option() {
                 // move the "pointer" on the swr graph
                 swr_i = constrain((int32_t)swr_i+turn, 0, analysis_results_len-1);
                 assert(swr_i < analysis_results_len);
-                draw_swr_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
-                draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+                graph_context->draw_swr_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
+                graph_context->draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             }
             break;
         case MOPT_SMITH:
@@ -1104,32 +745,32 @@ void handle_option() {
                 // move the "pointer" on the smith chart
                 swr_i = constrain((int32_t)swr_i+turn, 0, analysis_results_len-1);
                 assert(swr_i < analysis_results_len);
-                draw_smith_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
-                draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+                graph_context->draw_smith_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
+                graph_context->draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
             }
             break;
         case MOPT_SAVE_RESULTS:
         case MOPT_LOAD_RESULTS:
         case MOPT_SAVE_SETTINGS:
         case MOPT_LOAD_SETTINGS:
-            if(confirm_dialog.progress()) {
+            if(confirm_dialog->progress()) {
                 menu_back();
             }
             break;
         case MOPT_FQCENTER:
-            fq_setter.set_fq_value(MIN_FQ, MAX_FQ, "Center Frequency");
+            fq_setter->set_fq_value(MIN_FQ, MAX_FQ, "Center Frequency");
             break;
         case MOPT_FQWINDOW:
-            fq_setter.set_fq_value(0, MAX_FQ/2, "Frequency Range");
+            fq_setter->set_fq_value(0, MAX_FQ/2, "Frequency Range");
             break;
         case MOPT_FQSTART:
-            fq_setter.set_fq_value(MIN_FQ, MAX_FQ, "Start Frequency");
+            fq_setter->set_fq_value(MIN_FQ, MAX_FQ, "Start Frequency");
             break;
         case MOPT_FQEND:
-            fq_setter.set_fq_value(MIN_FQ, MAX_FQ, "End Frequency");
+            fq_setter->set_fq_value(MIN_FQ, MAX_FQ, "End Frequency");
             break;
         case MOPT_FQBAND:
-            if (band_setter.set_band()) {
+            if (band_setter->set_band()) {
                 menu_back();
                 draw_title();
             }
@@ -1138,7 +779,7 @@ void handle_option() {
             dotsNumber = set_user_value(dotsNumber, 1, 128, "Steps");
             break;
         case MOPT_CALIBRATE: {
-            if(calibrator.calibration_step()) {
+            if(calibrator->calibration_step()) {
                 menu_back();
             }
             break;
@@ -1344,10 +985,6 @@ void loop() {
     debounced_input.readTransitionsState();
     click = debounced_input.transitions > 0 && !debounced_input.digitalRead();
 
-    if(click) {
-        Serial.println("got a click");
-    }
-
     if(click && error_message[0]) {
         //clear errors on positive user interaction
         clear_error_display();
@@ -1364,24 +1001,6 @@ void loop() {
     handle_option();
     // TODO: if we're in a measurement, allow cancelling it by clicking
     //delay(50);
-}
-
-void analyze_frequency(uint32_t fq) {
-    Complex uncal_z = analyzer.uncalibrated_measure(fq);
-    Complex cal_gamma = analyzer.calibrated_gamma(fq, uncal_z);
-    float SWR = compute_swr(cal_gamma);
-
-    Serial.print("Fq: ");
-    Serial.print(fq);
-    Serial.print(", Gamma: ");
-    Serial.print(cal_gamma);
-    Serial.print(", Z: ");
-    Serial.print(compute_z(cal_gamma, Z0));
-    Serial.print(", SWR: ");
-    Serial.print(SWR);
-    Serial.print(", Zuncal: ");
-    Serial.print(uncal_z);
-    Serial.print("\r\n");
 }
 
 /*
