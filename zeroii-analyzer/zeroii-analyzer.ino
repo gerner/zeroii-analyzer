@@ -3,9 +3,7 @@
 
 #include <Adafruit_GFX.h>    // Core graphics library
 #include "Adafruit_TFTLCD.h"
-#include "TouchScreen.h"
 
-#include <SPI.h>
 #include <SdFat.h>
 
 #include "RTClib.h"
@@ -108,7 +106,7 @@ Adafruit_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
 // For better pressure precision, we need to know the resistance
 // between X+ and X- Use any multimeter to read it
 // For the one we're using, its 300 ohms across the X plate
-TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
+//TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 
 //TODO: cleanup graph.h so it doesn't have to be included here
 #include "graph.h"
@@ -478,26 +476,23 @@ void enter_option(int32_t option_id) {
             calibrator->initialize(start_fq, end_fq, step_count, calibration_results);
             break;
         case MOPT_SWR: {
-            swr_i = 0;
-            graph_context = new GraphContext();
+            graph_context = new GraphContext(analysis_results, analysis_results_len, &analyzer);
             if(graph_context == NULL) {
                 loop_logger.error("could not make a GraphContext");
             }
-            graph_context->graph_swr(analysis_results, analysis_results_len, &analyzer);
-            graph_context->draw_swr_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
-            graph_context->draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+            graph_context->graph_swr();
+            graph_context->draw_swr_pointer();
+            graph_context->draw_swr_title();
             break;
         }
         case MOPT_SMITH: {
-            swr_i = 0;
-
-            graph_context = new GraphContext();
+            graph_context = new GraphContext(analysis_results, analysis_results_len, &analyzer);
             if(graph_context == NULL) {
                 loop_logger.error("could not make a GraphContext");
             }
-            graph_context->graph_smith(analysis_results, analysis_results_len, &analyzer);
-            graph_context->draw_smith_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
-            graph_context->draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+            graph_context->graph_smith();
+            graph_context->draw_smith_pointer();
+            graph_context->draw_smith_title();
             break;
         }
         case MOPT_SAVE_RESULTS:
@@ -762,10 +757,9 @@ void handle_option() {
                 menu_back();
             } else if (turn != 0 && analysis_results_len > 0) {
                 // move the "pointer" on the swr graph
-                swr_i = constrain((int32_t)swr_i+turn, 0, analysis_results_len-1);
-                assert(swr_i < analysis_results_len);
-                graph_context->draw_swr_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
-                graph_context->draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+                graph_context->incr_swri(turn);
+                graph_context->draw_swr_pointer();
+                graph_context->draw_swr_title();
             }
             break;
         case MOPT_SMITH:
@@ -773,10 +767,9 @@ void handle_option() {
                 menu_back();
             } else if (turn != 0 && analysis_results_len > 0) {
                 // move the "pointer" on the smith chart
-                swr_i = constrain((int32_t)swr_i+turn, 0, analysis_results_len-1);
-                assert(swr_i < analysis_results_len);
-                graph_context->draw_smith_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
-                graph_context->draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
+                graph_context->incr_swri(turn);
+                graph_context->draw_smith_pointer();
+                graph_context->draw_smith_title();
             }
             break;
         case MOPT_SAVE_RESULTS:

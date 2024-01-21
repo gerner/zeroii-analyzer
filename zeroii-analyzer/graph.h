@@ -4,7 +4,6 @@
 #include "log.h"
 
 Logger graph_logger = Logger("graph");
-size_t swr_i = 0;
 
 String frequency_formatter(const int32_t fq) {
     int int_part, dec_part;
@@ -54,6 +53,8 @@ void read_patch(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t* patch) {
 
 class GraphContext {
 public:
+    GraphContext(const AnalysisPoint* results, const size_t results_len, const Analyzer* analyzer) : swr_i_(0), results_(results), results_len_(results_len), analyzer_(analyzer) {}
+
     template<class T>
     void draw_swr_label(const T label, uint32_t fq, float swr, float x_min, float x_max, float y_min, float y_max, int16_t x_screen, int16_t y_screen, int16_t width, int16_t height, const Analyzer* analyzer) {
         int16_t label_xy[2];
@@ -64,8 +65,8 @@ public:
         tft.print(label);
     }
 
-    void graph_swr(const AnalysisPoint* results, size_t results_len, const Analyzer* analyzer) {
-        graph_logger.info(String("graphing swr plot with ")+results_len+" points");
+    void graph_swr() {
+        graph_logger.info(String("graphing swr plot with ")+results_len_+" points");
 
         // set the pointer patch outside the graph area
         pointer_patch_x = tft.width();
@@ -87,16 +88,16 @@ public:
         tft.drawFastVLine(x_screen, y_screen, height, WHITE);
         tft.drawFastVLine(x_screen+width, y_screen, height, WHITE);
 
-        uint32_t start_fq = results[0].fq;
-        uint32_t end_fq = results[results_len-1].fq;
+        uint32_t start_fq = results_[0].fq;
+        uint32_t end_fq = results_[results_len_-1].fq;
 
         // add some axes labels fq min/max, swr 1.5, 3
         tft.setTextSize(LABEL_TEXT_SIZE);
         tft.setTextColor(GRAY);
-        draw_swr_label(frequency_formatter(start_fq), start_fq, 1.0, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, analyzer);
-        draw_swr_label(frequency_formatter(end_fq), end_fq, 1.0, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, analyzer);
-        draw_swr_label(1.5, start_fq, 1.5, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, analyzer);
-        draw_swr_label(3.0, start_fq, 3.0, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, analyzer);
+        draw_swr_label(frequency_formatter(start_fq), start_fq, 1.0, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, analyzer_);
+        draw_swr_label(frequency_formatter(end_fq), end_fq, 1.0, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, analyzer_);
+        draw_swr_label(1.5, start_fq, 1.5, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, analyzer_);
+        draw_swr_label(3.0, start_fq, 3.0, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, analyzer_);
         tft.setTextColor(WHITE);
 
         int16_t xy_cutoff[2];
@@ -105,31 +106,31 @@ public:
         translate_to_screen(0, 1.5, 0, 1, 5, 1, x_screen, y_screen, width, height, xy_cutoff);
         tft.drawFastHLine(x_screen, xy_cutoff[1], width, MAGENTA);
         // draw all the analysis points
-        if (results_len == 0) {
+        if (results_len_ == 0) {
             graph_logger.info(F("no results to plot"));
             return;
         }
 
         //TODO: what do we do if none of the SWR falls into plottable region?
 
-        if (results_len == 1) {
+        if (results_len_ == 1) {
             int16_t xy[2];
-            translate_to_screen(results[0].fq, compute_swr(analyzer->calibrated_gamma(results[0])), start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, xy);
+            translate_to_screen(results_[0].fq, compute_swr(analyzer_->calibrated_gamma(results_[0])), start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, xy);
             tft.fillCircle(xy[0], xy[1], 3, YELLOW);
         } else {
-            for (size_t i=0; i<results_len-1; i++) {
-                float swr = compute_swr(analyzer->calibrated_gamma(results[i]));
+            for (size_t i=0; i<results_len_-1; i++) {
+                float swr = compute_swr(analyzer_->calibrated_gamma(results_[i]));
                 int16_t xy_start[2];
-                translate_to_screen(results[i].fq, swr, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, xy_start);
+                translate_to_screen(results_[i].fq, swr, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, xy_start);
                 int16_t xy_end[2];
-                translate_to_screen(results[i+1].fq, compute_swr(analyzer->calibrated_gamma(results[i+1])), start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, xy_end);
+                translate_to_screen(results_[i+1].fq, compute_swr(analyzer_->calibrated_gamma(results_[i+1])), start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, xy_end);
                 graph_logger.debug(String("drawing line ")+xy_start[0]+","+xy_start[1]+" to "+xy_end[0]+","+xy_end[1]);
                 tft.drawLine(xy_start[0], xy_start[1], xy_end[0], xy_end[1], YELLOW);
             }
         }
     }
 
-    void draw_swr_pointer(const AnalysisPoint* results, size_t results_len, size_t swr_i, const Analyzer* analyzer) {
+    void draw_swr_pointer() {
         // x ranges from start fq to end fq
         // y ranges from 1 to 5
         int16_t x_screen = 8*4;
@@ -137,11 +138,11 @@ public:
         int16_t width = tft.width()-x_screen-5*6*LABEL_TEXT_SIZE;
         int16_t height = tft.height()-y_screen-8*2;
 
-        if (results_len == 0) {
+        if (results_len_ == 0) {
             return;
         }
-        uint32_t start_fq = results[0].fq;
-        uint32_t end_fq = results[results_len-1].fq;
+        uint32_t start_fq = results_[0].fq;
+        uint32_t end_fq = results_[results_len_-1].fq;
 
         //first clear the old swr pointer
         if(pointer_patch_x < tft.width() && pointer_patch_y < tft.height()) {
@@ -150,15 +151,15 @@ public:
 
         //draw the "pointer"
         int16_t xy_pointer[2];
-        translate_to_screen(results[swr_i].fq, compute_swr(analyzer->calibrated_gamma(results[swr_i])), start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, xy_pointer);
+        translate_to_screen(results_[swr_i_].fq, compute_swr(analyzer_->calibrated_gamma(results_[swr_i_])), start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, xy_pointer);
         pointer_patch_x = xy_pointer[0]-POINTER_WIDTH/2;
         pointer_patch_y = xy_pointer[1];
         read_patch(pointer_patch_x, pointer_patch_y, POINTER_WIDTH, POINTER_HEIGHT, pointer_patch);
         tft.drawTriangle(xy_pointer[0], xy_pointer[1], xy_pointer[0]-POINTER_WIDTH/2, xy_pointer[1]+POINTER_HEIGHT-1, xy_pointer[0]+POINTER_WIDTH/2-1, xy_pointer[1]+POINTER_HEIGHT-1, GREEN);
     }
 
-    size_t draw_swr_title(const AnalysisPoint* results, size_t results_len, size_t swr_i, const Analyzer* analyzer) {
-        if (results_len == 0) {
+    size_t draw_swr_title() {
+        if (results_len_ == 0) {
             tft.fillRect(0, 0, tft.width()-8*TITLE_TEXT_SIZE*5, 8*TITLE_TEXT_SIZE, BLACK);
             tft.setCursor(0,0);
             tft.setTextSize(TITLE_TEXT_SIZE);
@@ -167,9 +168,9 @@ public:
         }
 
         size_t min_swr_i = 0;
-        float min_swr = compute_swr(analyzer->calibrated_gamma(results[0]));
-        for (size_t i=0; i<results_len; i++) {
-            float swr = compute_swr(analyzer->calibrated_gamma(results[i]));
+        float min_swr = compute_swr(analyzer_->calibrated_gamma(results_[0]));
+        for (size_t i=0; i<results_len_; i++) {
+            float swr = compute_swr(analyzer_->calibrated_gamma(results_[i]));
             if (swr < min_swr) {
                 min_swr = swr;
                 min_swr_i = i;
@@ -181,23 +182,23 @@ public:
         tft.setCursor(0,0);
         tft.setTextSize(TITLE_TEXT_SIZE);
 
-        Complex min_g = analyzer->calibrated_gamma(results[min_swr_i]);
-        Complex sel_g = analyzer->calibrated_gamma(results[swr_i]);
+        Complex min_g = analyzer_->calibrated_gamma(results_[min_swr_i]);
+        Complex sel_g = analyzer_->calibrated_gamma(results_[swr_i_]);
 
-        tft.println(String("Min @ ")+frequency_formatter(results[min_swr_i].fq)+" "+compute_swr(min_g)+"SWR");
-        tft.println(String("Sel @ ")+frequency_formatter(results[swr_i].fq)+" "+compute_swr(sel_g)+"SWR");
+        tft.println(String("Min @ ")+frequency_formatter(results_[min_swr_i].fq)+" "+compute_swr(min_g)+"SWR");
+        tft.println(String("Sel @ ")+frequency_formatter(results_[swr_i_].fq)+" "+compute_swr(sel_g)+"SWR");
 
         return min_swr_i;
     }
 
-    void draw_smith_coords(const AnalysisPoint* results, size_t results_len, size_t swr_i, const Analyzer* analyzer, size_t min_swr_i) {
-        if(results_len == 0) {
+    void draw_smith_coords(size_t min_swr_i) {
+        if(results_len_ == 0) {
             return;
         }
-        Complex min_g = analyzer->calibrated_gamma(results[min_swr_i]);
-        Complex min_z = compute_z(min_g, analyzer->z0_);
-        Complex sel_g = analyzer->calibrated_gamma(results[swr_i]);
-        Complex sel_z = compute_z(sel_g, analyzer->z0_);
+        Complex min_g = analyzer_->calibrated_gamma(results_[min_swr_i]);
+        Complex min_z = compute_z(min_g, analyzer_->z0_);
+        Complex sel_g = analyzer_->calibrated_gamma(results_[swr_i_]);
+        Complex sel_z = compute_z(sel_g, analyzer_->z0_);
 
         tft.fillRect(0, tft.height()-2*8*TITLE_TEXT_SIZE, tft.width(), 8*TITLE_TEXT_SIZE*2, BLACK);
         tft.setCursor(0, tft.height()-2*8*TITLE_TEXT_SIZE);
@@ -206,25 +207,25 @@ public:
         tft.println(String("Sel X: ")+sel_z.real()+" R: "+sel_z.imag());
     }
 
-    void draw_smith_title(const AnalysisPoint* results, size_t results_len, size_t swr_i, const Analyzer* analyzer) {
-        size_t min_swr_i = draw_swr_title(results, results_len, swr_i, analyzer);
-        draw_smith_coords(results, results_len, swr_i, analyzer, min_swr_i);
+    void draw_smith_title() {
+        size_t min_swr_i = draw_swr_title();
+        draw_smith_coords(min_swr_i);
     }
 
     template<class T>
-    void draw_smith_label(const T label, const Complex z, float x_min, float x_max, float y_min, float y_max, int16_t x_screen, int16_t y_screen, int16_t width, int16_t height, const Analyzer* analyzer) {
+    void draw_smith_label(const T label, const Complex z, float x_min, float x_max, float y_min, float y_max, int16_t x_screen, int16_t y_screen, int16_t width, int16_t height) {
         int16_t label_xy[2];
         Complex label_g;
 
-        label_g = compute_gamma(z, analyzer->z0_);
+        label_g = compute_gamma(z, analyzer_->z0_);
         translate_to_screen(label_g.real(), label_g.imag(), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, label_xy);
         tft.fillCircle(label_xy[0], label_xy[1], 2, WHITE);
         tft.setCursor(label_xy[0]+6*LABEL_TEXT_SIZE/2, label_xy[1]+8*LABEL_TEXT_SIZE/2);
         tft.print(label);
     }
 
-    void graph_smith(const AnalysisPoint* results, size_t results_len, const Analyzer* analyzer) {
-        graph_logger.info(String("graphing swr plot with ")+results_len+" points");
+    void graph_smith() {
+        graph_logger.info(String("graphing swr plot with ")+results_len_+" points");
         pointer_patch_x = tft.width();
         pointer_patch_y = tft.height();
 
@@ -255,11 +256,11 @@ public:
         tft.setTextSize(LABEL_TEXT_SIZE);
         tft.setTextColor(GRAY);
 
-        draw_smith_label(analyzer->z0_, Complex(analyzer->z0_, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
-        draw_smith_label(analyzer->z0_*2, Complex(analyzer->z0_*2.0, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
-        draw_smith_label(analyzer->z0_/2.0, Complex(analyzer->z0_/2.0, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
-        draw_smith_label(analyzer->z0_, Complex(analyzer->z0_, analyzer->z0_), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
-        draw_smith_label(analyzer->z0_, Complex(analyzer->z0_, -analyzer->z0_), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, analyzer);
+        draw_smith_label(analyzer_->z0_, Complex(analyzer_->z0_, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height);
+        draw_smith_label(analyzer_->z0_*2, Complex(analyzer_->z0_*2.0, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height);
+        draw_smith_label(analyzer_->z0_/2.0, Complex(analyzer_->z0_/2.0, 0), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height);
+        draw_smith_label(analyzer_->z0_, Complex(analyzer_->z0_, analyzer_->z0_), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height);
+        draw_smith_label(analyzer_->z0_, Complex(analyzer_->z0_, -analyzer_->z0_), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height);
 
         tft.setTextColor(WHITE);
 
@@ -280,18 +281,18 @@ public:
         tft.drawCircle(x_screen+width/2, y_screen+height/2, swr_15[0], MAGENTA);
 
         // draw all the analysis points
-        if (results_len == 0) {
+        if (results_len_ == 0) {
             graph_logger.info(F("no results to plot"));
             return;
-        } else if (results_len == 1) {
+        } else if (results_len_ == 1) {
             int16_t xy[2];
-            Complex g = analyzer->calibrated_gamma(results[0]);
+            Complex g = analyzer_->calibrated_gamma(results_[0]);
             translate_to_screen(g.real(), g.imag(), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, xy);
             tft.fillCircle(xy[0], xy[1], 3, YELLOW);
         } else {
-            for (size_t i=0; i<results_len-1; i++) {
-                Complex g_start = analyzer->calibrated_gamma(results[i]);
-                Complex g_end = analyzer->calibrated_gamma(results[i+1]);
+            for (size_t i=0; i<results_len_-1; i++) {
+                Complex g_start = analyzer_->calibrated_gamma(results_[i]);
+                Complex g_end = analyzer_->calibrated_gamma(results_[i+1]);
                 int16_t xy_start[2];
                 translate_to_screen(g_start.real(), g_start.imag(), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, xy_start);
                 int16_t xy_end[2];
@@ -302,7 +303,7 @@ public:
         }
     }
 
-    void draw_smith_pointer(const AnalysisPoint* results, size_t results_len, size_t swr_i, const Analyzer* analyzer) {
+    void draw_smith_pointer() {
         int16_t x_screen = 8*2;
         int16_t y_screen = -(tft.width()-x_screen-tft.height())/2;//8*TITLE_TEXT_SIZE*2;
         int16_t width = tft.width()-x_screen;
@@ -314,11 +315,11 @@ public:
         float y_min = 1;
         float y_max = -1;
 
-        if (results_len == 0) {
+        if (results_len_ == 0) {
             return;
         }
-        uint32_t start_fq = results[0].fq;
-        uint32_t end_fq = results[results_len-1].fq;
+        uint32_t start_fq = results_[0].fq;
+        uint32_t end_fq = results_[results_len_-1].fq;
 
         //first clear the old swr pointer
         if(pointer_patch_x < tft.width() && pointer_patch_y < tft.height()) {
@@ -327,7 +328,7 @@ public:
 
         //draw the "pointer"
         int16_t xy_pointer[2];
-        Complex gamma_pointer = analyzer->calibrated_gamma(results[swr_i]);
+        Complex gamma_pointer = analyzer_->calibrated_gamma(results_[swr_i_]);
         translate_to_screen(gamma_pointer.real(), gamma_pointer.imag(), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, xy_pointer);
         pointer_patch_x = xy_pointer[0]-POINTER_WIDTH/2;
         pointer_patch_y = xy_pointer[1];
@@ -335,10 +336,17 @@ public:
         tft.drawTriangle(xy_pointer[0], xy_pointer[1], xy_pointer[0]-POINTER_WIDTH/2, xy_pointer[1]+POINTER_HEIGHT-1, xy_pointer[0]+POINTER_WIDTH/2-1, xy_pointer[1]+POINTER_HEIGHT-1, GREEN);
     }
 
+    void incr_swri(int32_t turn) {
+        swr_i_ = constrain((int32_t)swr_i_+turn, 0, results_len_-1);
+    }
+
 private:
     int16_t pointer_patch_x, pointer_patch_y;
     uint16_t pointer_patch[POINTER_WIDTH*POINTER_HEIGHT];
+    size_t swr_i_;
+    const AnalysisPoint* results_;
+    size_t results_len_;
+    const Analyzer* analyzer_;
 };
-
 
 #endif //_GRAPH_H
