@@ -7,6 +7,33 @@
 #include <RTClib.h>
 #include <SdFat.h>
 
+#ifdef __arm__
+// should use uinstd.h to define sbrk but Due causes a conflict
+extern "C" char* sbrk(int incr);
+#else  // __ARM__
+extern char *__brkval;
+#endif  // __arm__
+
+int freeMemory() {
+  char top;
+#ifdef __arm__
+  return &top - reinterpret_cast<char*>(sbrk(0));
+#elif defined(CORE_TEENSY) || (ARDUINO > 103 && ARDUINO != 151)
+  return &top - __brkval;
+#else  // __arm__
+  return __brkval ? &top - __brkval : &top - __malloc_heap_start;
+#endif  // __arm__
+}
+
+size_t total_memory;
+void shell_begin() {
+#ifndef RAMEND
+    total_memory = freeMemory();
+#else
+    total_memory = RAMEND;
+#endif
+}
+
 #define MAX_SERIAL_COMMAND 128
 char serial_command[MAX_SERIAL_COMMAND+1];
 size_t serial_command_len = 0;
@@ -28,6 +55,7 @@ bool read_serial_command() {
 void wait_for_serial() {
     char c;
     while(((c = Serial.read()) == 0) || (c != '\n')) {
+        delay(100);
     }
 }
 
@@ -188,6 +216,15 @@ void shellfn_aref(size_t argc, char* argv[]) {
     Serial.print("\t");
     Serial.print(analogReference());
     Serial.print("\n");
+}
+
+#include <malloc.h>
+extern uint32_t __StackTop;
+void shellfn_free(size_t argc, char* argv[]) {
+    size_t free = freeMemory();
+    size_t used = mallinfo().arena + ((size_t*)__StackTop - &used);
+    Serial.println("\ttotal\tused\tfree");
+    Serial.println(String("Mem:\t")+(free+used)+"\t"+used+"\t"+free);
 }
 
 void shellfn_dir(size_t argc, char* argv[]) {
@@ -355,6 +392,39 @@ void shellfn_cat(size_t argc, char* argv[]) {
     target.close();
 }
 
+void shellfn_mkdir(size_t argc, char* argv[]) {
+    if (argc < 2 || argc > 3) {
+        Serial.println("usage: mkdir [-p] dirpath");
+        return;
+    }
+
+    const char* target_name = argv[1];
+    bool mk_parents = false;
+    if (argc > 2) {
+        if(strcmp("-p", argv[1]) == 0) {
+            mk_parents = true;
+            target_name = argv[2];
+        } else if(strcmp("-p", argv[2]) == 0) {
+            mk_parents = true;
+        } else {
+            Serial.println("usage: mkdir [-p] dirpath");
+            return;
+        }
+    }
+
+    FsFile root;
+    if (!root.open("/")) {
+        Serial.println("could not open root!");
+    }
+
+    FsFile new_dir;
+    if(!new_dir.mkdir(&root, target_name, mk_parents)) {
+        Serial.println("error creating directory");
+    }
+
+    root.close();
+}
+
 void shellfn_pixel(size_t argc, char* argv[]) {
     //pixel x y [color]
     //without color, print the color of pixel x y
@@ -374,6 +444,129 @@ void shellfn_pixel(size_t argc, char* argv[]) {
         Serial.println(String("reading at ")+x+","+y);
         Serial.println(tft.readPixel(x, y));
     }
+}
+
+template<class T>
+void write16(T &writer, const uint16_t v) {
+    writer.write(((uint8_t *)&v)[0]);
+    writer.write(((uint8_t *)&v)[1]);
+}
+
+template<class T>
+void write32(T &writer, const uint32_t v) {
+    writer.write(((uint8_t *)&v)[0]);
+    writer.write(((uint8_t *)&v)[1]);
+    writer.write(((uint8_t *)&v)[2]);
+    writer.write(((uint8_t *)&v)[3]);
+}
+
+template<class T>
+void write_color16_as_24(T &writer, uint16_t pixel) {
+    // per AdafruitTFT lib color565 function (24bit color -> 16bit color):
+    // ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+    // pixel is 565 format
+    uint8_t r = (pixel >> 8) & 0xF8;
+    uint8_t g = (pixel >> 3) & 0xFC;
+    uint8_t b = (pixel << 3) & 0xFF;
+
+    writer.write(r);
+    writer.write(g);
+    writer.write(b);
+}
+
+void shellfn_screenshot(size_t argc, char* argv[]) {
+    if (argc < 2) {
+        Serial.println("usage: screenshot filepath");
+        return;
+    }
+
+    const char* target_name = argv[1];
+
+    const uint16_t bmp_depth = 24;
+    const uint32_t width = tft.width();
+    const uint32_t height = tft.height();
+    const uint32_t image_offset = 14 + 40;
+    // row_size has some padding
+    // this calculation taken from Adafruit TFT bmp example
+    // this assumes 24 bits per pixel (compare to bmp_depth above)
+    const uint32_t row_size = (width * 3 + 3) & ~3;
+    const uint32_t bitmap_size = row_size * height;
+    const uint32_t file_size = bitmap_size + image_offset;
+    const uint8_t padding = row_size - width*bmp_depth/8;
+
+    FsFile target;
+    if(!target.open(target_name, O_RDWR | O_CREAT | O_TRUNC)) {
+        Serial.println(String("could not open ")+target_name+" for append");
+        return;
+    }
+
+    Serial.println("writing header");
+    // BMP header (14 bytes)
+    // magic bytes
+    target.write(0x42);
+    target.write(0x4D);
+    //file size
+    write32(target, file_size);
+    // creator bytes
+    write32(target, 0u);
+    // image offset
+    write32(target, image_offset);
+
+    // DIB header (Windows BITMAPINFO format) (40 bytes)
+    // header size
+    write32(target, 40u);
+    // width/height
+    write32(target, width);
+    write32(target, height);
+    // planes == 1
+    write16(target, 1u);
+    // bits per pixel
+    write16(target, bmp_depth);
+    // compression == 0 no compression
+    write32(target, 0u);
+    // raw bitmap size
+    write32(target, bitmap_size);
+    // horizontal/vertical resolutions 2835 ~72dpi
+    write32(target, 2835);
+    write32(target, 2835);
+    // colors and important colors in palette, 0 is default
+    write32(target, 0u);
+    write32(target, 0u);
+
+    Serial.println(String("file size: ")+file_size);
+    Serial.println(String("image offset: ")+image_offset);
+
+    Serial.println(String("rows: ")+height);
+    Serial.println(String("cols: ")+width);
+    Serial.println(String("bitmap size: ")+bitmap_size);
+
+    Serial.println(String("rowsize: ")+row_size);
+    Serial.println(String("padding: ")+padding);
+
+    // pixel array (at last)
+    // rows are padded to multiple of 32 bits (row_size)
+    // rows are stored bottom to top
+    // tft pixels are 16-bit 565 format and we need to explode that into 24-bit
+    Serial.print("writing pixel data");
+
+    // unsigned value will wrap around to a large number after row 0,
+    // so we check that row < height for the loop condition
+    for(size_t row = height-1; row < height; row--) {
+        for(size_t col = 0; col<width; col++) {
+            uint16_t pixel = tft.readPixel(col, row);
+            write_color16_as_24(target, pixel);
+        }
+        //fill out the padding
+        for(size_t i=0; i<padding; i++) {
+            target.write((uint8_t)0u);
+        }
+        Serial.print(".");
+    }
+    Serial.println("done");
+
+    target.close();
+
+    Serial.println(String("screenshot saved to ")+target_name);
 }
 
 void shellfn_date(size_t argc, char* argv[]) {
@@ -403,12 +596,15 @@ void shellfn_date(size_t argc, char* argv[]) {
     }
 }
 
+#define SHELL_COMMANDS_SIZE 
+
 const char* SHELL_COMMANDS[] = {
     "help",
     "reset",
     "eeprom",
     "batt",
     "aref",
+    "free",
 
     //fs stuff
     "dir",
@@ -418,9 +614,11 @@ const char* SHELL_COMMANDS[] = {
     "mv",
     "touch",
     "cat",
+    "mkdir",
 
     //tft stuff
     "pixel",
+    "screenshot",
 
     //rtc stuff
     "date",
@@ -430,6 +628,8 @@ const char* SHELL_COMMANDS[] = {
     "results",
     "menu_state",
 };
+
+
 
 void shellfn_help(size_t argc, char* argv[]) {
     Serial.println(String("available commands (")+sizeof(SHELL_COMMANDS)/sizeof(SHELL_COMMANDS[0])+"):");
@@ -446,6 +646,8 @@ const shell_command_t SHELL_FUNCTIONS[] = {
     shellfn_eeprom,
     shellfn_batt,
     shellfn_aref,
+    shellfn_free,
+
     shellfn_dir,
     shellfn_df,
     shellfn_fstype,
@@ -453,13 +655,19 @@ const shell_command_t SHELL_FUNCTIONS[] = {
     shellfn_mv,
     shellfn_touch,
     shellfn_cat,
+    shellfn_mkdir,
+
     shellfn_pixel,
+    shellfn_screenshot,
+
     shellfn_date,
 
     shellfn_result,
     shellfn_results,
     shellfn_menu_state
 };
+
+typedef char CHECK_SHELL_COMMANDS[sizeof(SHELL_COMMANDS) / sizeof(SHELL_COMMANDS[0]) == sizeof(SHELL_FUNCTIONS)/sizeof(SHELL_FUNCTIONS[0]) ? 1 : -1];
 
 size_t split_args(char* command, size_t command_len, char** argv) {
     size_t len_left = command_len;

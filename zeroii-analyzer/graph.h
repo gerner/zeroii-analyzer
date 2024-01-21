@@ -1,22 +1,25 @@
 #ifndef _GRAPH_H
 #define _GRAPH_H
 
+#include "log.h"
+
+Logger graph_logger = Logger("graph");
 size_t swr_i = 0;
 
 String frequency_formatter(const int32_t fq) {
     int int_part, dec_part;
     char buf[3+1+3+3+1];
-    if (fq > 1ul * 1000ul * 1000ul * 1000ul) {
+    if (fq >= 1ul * 1000ul * 1000ul * 1000ul) {
         int_part = fq / 1000ul / 1000ul / 1000ul;
         dec_part = fq / 1000ul / 1000ul % 1000ul;
         snprintf(buf, sizeof(buf), "%d.%03dGHz", int_part, dec_part);
         return String(buf);
-    } else if (fq > 1ul * 1000ul * 1000ul) {
+    } else if (fq >= 1ul * 1000ul * 1000ul) {
         int_part = fq / 1000ul / 1000ul;
         dec_part = fq / 1000ul % 1000ul;
         snprintf(buf, sizeof(buf), "%d.%03dMHz", int_part, dec_part);
         return String(buf);
-    } else if (fq > 1ul * 1000ul) {
+    } else if (fq >= 1ul * 1000ul) {
         int_part = fq / 1000ul;
         dec_part = fq % 1000ul;
         snprintf(buf, sizeof(buf), "%d.%03dkHz", int_part, dec_part);
@@ -35,8 +38,7 @@ void translate_to_screen(float x_in, float y_in, float x_min, float x_max, float
     xy[0] = (x_in - x_min) / x_range * width + x_screen;
     xy[1] = (y_in - y_min) / y_range * height + y_screen;
 
-    Serial.println(String(x_in)+" -> "+xy[0]+" "+y_in+" -> "+xy[1]);
-    Serial.flush();
+    graph_logger.debug(String(x_in)+" -> "+xy[0]+" "+y_in+" -> "+xy[1]);
 }
 
 void read_patch(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t* patch) {
@@ -63,8 +65,7 @@ public:
     }
 
     void graph_swr(const AnalysisPoint* results, size_t results_len, const Analyzer* analyzer) {
-        Serial.println(String("graphing swr plot with ")+results_len+" points");
-        Serial.flush();
+        graph_logger.info(String("graphing swr plot with ")+results_len+" points");
 
         // set the pointer patch outside the graph area
         pointer_patch_x = tft.width();
@@ -105,7 +106,7 @@ public:
         tft.drawFastHLine(x_screen, xy_cutoff[1], width, MAGENTA);
         // draw all the analysis points
         if (results_len == 0) {
-            Serial.println("no results to plot");
+            graph_logger.info(F("no results to plot"));
             return;
         }
 
@@ -122,7 +123,7 @@ public:
                 translate_to_screen(results[i].fq, swr, start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, xy_start);
                 int16_t xy_end[2];
                 translate_to_screen(results[i+1].fq, compute_swr(analyzer->calibrated_gamma(results[i+1])), start_fq, end_fq, 5, 1, x_screen, y_screen, width, height, xy_end);
-                Serial.println(String("drawing line ")+xy_start[0]+","+xy_start[1]+" to "+xy_end[0]+","+xy_end[1]);
+                graph_logger.debug(String("drawing line ")+xy_start[0]+","+xy_start[1]+" to "+xy_end[0]+","+xy_end[1]);
                 tft.drawLine(xy_start[0], xy_start[1], xy_end[0], xy_end[1], YELLOW);
             }
         }
@@ -158,6 +159,9 @@ public:
 
     size_t draw_swr_title(const AnalysisPoint* results, size_t results_len, size_t swr_i, const Analyzer* analyzer) {
         if (results_len == 0) {
+            tft.fillRect(0, 0, tft.width()-8*TITLE_TEXT_SIZE*5, 8*TITLE_TEXT_SIZE, BLACK);
+            tft.setCursor(0,0);
+            tft.setTextSize(TITLE_TEXT_SIZE);
             tft.println("No SWR results");
             return 0;
         }
@@ -220,8 +224,7 @@ public:
     }
 
     void graph_smith(const AnalysisPoint* results, size_t results_len, const Analyzer* analyzer) {
-        Serial.println(String("graphing swr plot with ")+results_len+" points");
-        Serial.flush();
+        graph_logger.info(String("graphing swr plot with ")+results_len+" points");
         pointer_patch_x = tft.width();
         pointer_patch_y = tft.height();
 
@@ -278,7 +281,7 @@ public:
 
         // draw all the analysis points
         if (results_len == 0) {
-            Serial.println("no results to plot");
+            graph_logger.info(F("no results to plot"));
             return;
         } else if (results_len == 1) {
             int16_t xy[2];
@@ -293,7 +296,7 @@ public:
                 translate_to_screen(g_start.real(), g_start.imag(), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, xy_start);
                 int16_t xy_end[2];
                 translate_to_screen(g_end.real(), g_end.imag(), x_min, x_max, y_min, y_max, x_screen, y_screen, width, height, xy_end);
-                Serial.println(String("drawing line ")+xy_start[0]+","+xy_start[1]+" to "+xy_end[0]+","+xy_end[1]);
+                graph_logger.debug(String("drawing line ")+xy_start[0]+","+xy_start[1]+" to "+xy_end[0]+","+xy_end[1]);
                 tft.drawLine(xy_start[0], xy_start[1], xy_end[0], xy_end[1], YELLOW);
             }
         }

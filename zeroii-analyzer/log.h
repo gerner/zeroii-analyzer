@@ -9,7 +9,6 @@
 
 const char* level_names[] = {"CRIT", "ERROR", "WARN", "INFO", "DEBUG", "TRACE" };
 
-
 class Logger {
 public:
     Logger(const char* name) {
@@ -30,6 +29,19 @@ public:
             Serial.print(name_);
             Serial.print("\t");
             Serial.println(message);
+            Serial.flush();
+        }
+    }
+
+    void log(uint8_t level, __FlashStringHelper* message) {
+        if(level_ >= level) {
+            Serial.print("[");
+            Serial.print(level_names[level]);
+            Serial.print("]\t");
+            Serial.print(name_);
+            Serial.print("\t");
+            Serial.println(message);
+            Serial.flush();
         }
     }
 
@@ -43,6 +55,19 @@ public:
         log(LOG_INFO, message);
     }
     void debug(const char* message) {
+        log(LOG_DEBUG, message);
+    }
+
+    void error(__FlashStringHelper* message) {
+        log(LOG_ERROR, message);
+    }
+    void warn(__FlashStringHelper* message) {
+        log(LOG_WARNING, message);
+    }
+    void info(__FlashStringHelper* message) {
+        log(LOG_INFO, message);
+    }
+    void debug(__FlashStringHelper* message) {
         log(LOG_DEBUG, message);
     }
 
@@ -62,9 +87,9 @@ public:
         debug(message.c_str());
     }
 
-private:
     String name_;
     uint8_t level_;
+private:
 };
 
 #endif

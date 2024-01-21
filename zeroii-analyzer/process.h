@@ -1,6 +1,10 @@
 #ifndef _PROCESS_H
 #define _PROCESS_H
 
+#include "log.h"
+
+Logger process_logger("process");
+
 class AnalysisProcessor {
     public:
     void initialize(uint32_t start_fq, uint32_t end_fq, uint16_t steps, AnalysisPoint* results) {
@@ -10,7 +14,7 @@ class AnalysisProcessor {
         results_ = results;
         result_idx_ = 0;
 
-        Serial.println(String("analyzing startFq ")+start_fq+" endFq "+end_fq+" steps "+steps);
+        process_logger.info(String("analyzing startFq ")+start_fq+" endFq "+end_fq+" steps "+steps);
         tft.fillScreen(BLACK);
         draw_title();
         initialize_progress_meter("Analyzing...");
@@ -21,10 +25,9 @@ class AnalysisProcessor {
             return true;
         }
 
-        Serial.println(String("analyzing fq ")+fq_);
+        process_logger.info(String("analyzing fq ")+fq_);
         Complex z = analyzer.uncalibrated_measure(fq_);
-        Serial.println("putting into results array");
-        Serial.flush();
+        process_logger.debug(F("putting into results array"));
         results_[result_idx_] = AnalysisPoint(fq_, z);
         fq_ += step_fq_;
         result_idx_++;
@@ -60,7 +63,7 @@ class Calibrator {
         results_ = results;
         result_idx_ = 0;
 
-        Serial.println(String("calibrating startFq ")+start_fq+" endFq "+end_fq+" steps "+steps+" step_fq "+step_fq_);
+        process_logger.info(String("calibrating startFq ")+start_fq+" endFq "+end_fq+" steps "+steps+" step_fq "+step_fq_);
         tft.fillScreen(BLACK);
         draw_title();
     }
@@ -70,7 +73,7 @@ class Calibrator {
                 tft.setTextSize(2);
                 tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
                 tft.setCursor(0, 7*2*8);
-                tft.println("connect short and press knob");
+                tft.println(F("connect short and press knob"));
                 calibration_state_ = CAL_S_START;
                 break;
             // all three "start" cases are the same
@@ -80,8 +83,7 @@ class Calibrator {
             case CAL_L_START:
                 if (click) {
                     tft.fillRect(0, 7*2*8, tft.width(), 2*8, BLACK);
-                    Serial.print("calibration start state ");
-                    Serial.println(calibration_state_);
+                    process_logger.info(String("calibration start state ")+calibration_state_);
                     calibration_state_++;
                     fq_ = start_fq_;
                     result_idx_ = 0;
@@ -89,29 +91,29 @@ class Calibrator {
                 }
                 break;
             case CAL_S:
-                if(fq_ <= end_fq_) {
+                if(result_idx_ < steps_) {
                     results_[result_idx_].cal_short = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
                     results_[result_idx_].fq = fq_;
                     result_idx_++;
                     fq_ += step_fq_;
                     draw_progress_meter(steps_, result_idx_);
                 } else {
-                    Serial.println("done calibrating short.");
+                    process_logger.info(F("done calibrating short."));
                     tft.setTextSize(2);
                     tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
                     tft.setCursor(0, 7*2*8);
-                    tft.println("connect open and press knob");
+                    tft.println(F("connect open and press knob"));
                     calibration_state_ = CAL_O_START;
                 }
                 break;
             case CAL_O:
-                if(fq_ <= end_fq_) {
+                if(result_idx_ < steps_) {
                     results_[result_idx_].cal_open = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
                     result_idx_++;
                     fq_ += step_fq_;
                     draw_progress_meter(steps_, result_idx_);
                 } else {
-                    Serial.println("done calibrating open.");
+                    process_logger.info(F("done calibrating open."));
                     tft.setTextSize(2);
                     tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
                     tft.setCursor(0, 7*2*8);
@@ -120,13 +122,13 @@ class Calibrator {
                 }
                 break;
             case CAL_L:
-                if(fq_ <= end_fq_) {
+                if(result_idx_ < steps_) {
                     results_[result_idx_].cal_load = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
                     result_idx_++;
                     fq_ += step_fq_;
                     draw_progress_meter(steps_, result_idx_);
                 } else {
-                    Serial.println("done calibrating load.");
+                    process_logger.info(F("done calibrating load."));
                     tft.setTextSize(2);
                     tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
                     tft.setCursor(0, 6*2*8);
@@ -154,11 +156,25 @@ class Calibrator {
     size_t result_idx_;
 };
 
+String frequency_parts_formatter(const uint32_t fq) {
+    uint16_t ghz_part, mhz_part, khz_part, hz_part;
+    //char buf[1+3*4+3+1];
+    char buf[64];
+    ghz_part = fq / 1000 / 1000 / 1000;
+    mhz_part = fq / 1000 / 1000 % 1000ul;
+    khz_part = fq / 1000 % 1000ul;
+    hz_part  = fq % 1000ul;
+
+    snprintf(buf, sizeof(buf), "%d.%03d.%03d.%03d Hz", ghz_part, mhz_part, khz_part, hz_part);
+    return String(buf);
+}
+
 enum FQ_SETTING_STATE { FQ_SETTING_START, FQ_SETTING_GHZ, FQ_SETTING_MHZ, FQ_SETTING_KHZ, FQ_SETTING_HZ, FQ_SETTING_END };
 
 class FqSetter {
     public:
         void initialize(const uint32_t fq) {
+            process_logger.info("initialized FqSetter");
             fq_state_ = FQ_SETTING_START;
             fq_ = fq;
         }
@@ -173,27 +189,28 @@ class FqSetter {
         }
 
         void draw_fq_setting(const String label) const {
+            process_logger.debug(String("drawing frequency ")+fq_);
             tft.setTextSize(3);
             tft.fillRect(0, 6*2*8, tft.width(), 2*8*3, BLACK);
             tft.setCursor(0, 6*2*8);
             tft.print("    ");
+            process_logger.debug("fq parts");
             tft.println(frequency_parts_formatter(fq_));
+            process_logger.debug("fq indicator");
             tft.println(frequency_parts_indicator());
+            process_logger.debug("drew fq");
         }
 
-        uint32_t set_fq_value(const uint32_t min_fq, const uint32_t max_fq, const String label) {
+        bool set_fq_value(const uint32_t min_fq, const uint32_t max_fq, const String label) {
             // clicking advances through fields in the fq (GHz, MHz, ...) or sets the value
             if (click) {
                 if (fq_state_ == FQ_SETTING_HZ) {
-                    tft.fillScreen(BLACK);
-                    draw_title();
-                    menu_back();
                     fq_state_ = FQ_SETTING_END;
-                    return fq_;
+                    return true;
                 } else {
                     fq_state_++;
                     draw_fq_setting(label);
-                    return fq_;
+                    return false;
                 }
             } else if (fq_state_ == FQ_SETTING_START) {
                 fq_state_ = FQ_SETTING_GHZ;
@@ -202,7 +219,7 @@ class FqSetter {
                 tft.print(label);
                 tft.println(":");
                 draw_fq_setting(label);
-                return fq_;
+                return false;
             } else if (turn != 0) {
                 // rotating changes value
                 int32_t inc = 1ul;
@@ -211,16 +228,14 @@ class FqSetter {
                     case FQ_SETTING_MHZ: inc = 1ul * 1000 * 1000; break;
                     case FQ_SETTING_KHZ: inc = 1ul * 1000; break;
                 }
-                if (fq_state_ != FQ_SETTING_GHZ) {
-                    // inc scales with how fast you're turning it
-                    // inc is direction * 2 ^ speed / 10
-                    //inc = (uint32_t(1) << (uint32_t(encoder.speed()/2))) * inc;
-                } //k else just inc by 1GHz to avoid overflow
+                process_logger.debug(String("constraining fq ")+fq_+" "+turn+" "+inc+" "+min_fq+" "+max_fq);
+                process_logger.debug(String(fq_ + turn*inc));
                 fq_ = constrain(fq_ + turn * inc, min_fq, max_fq);
+                process_logger.debug(String(fq_));
                 draw_fq_setting(label);
-                return fq_;
+                return false;
             } else {
-                return fq_;
+                return false;
             }
         }
 
@@ -230,7 +245,8 @@ class FqSetter {
         uint32_t fq_;
 };
 
-#define NUM_BANDS 18
+#define NUM_BANDS 19
+#define BAND_10M 11
 class BandSetter {
     public:
     void initialize() {
@@ -238,7 +254,7 @@ class BandSetter {
         tft.fillScreen(BLACK);
         draw_title();
         tft.setCursor(0, 5*2*8);
-        tft.println("Band:");
+        tft.println(F("Band:"));
         draw_band_setting();
     }
     bool set_band() {
@@ -262,10 +278,12 @@ class BandSetter {
         *start_fq = band_fqs[band_idx_][0];
         *end_fq = band_fqs[band_idx_][1];
     }
+
+    const uint32_t band_fqs[NUM_BANDS][2] = { {135700, 137800}, {472000, 479000}, {1800000, 2000000}, {3500000, 4000000}, {5330500, 5406400}, {7000000, 7300000}, {10100000, 10150000}, {14000000, 14350000}, {18068000, 18168000}, {2100000, 21450000}, {24890000, 24990000}, {28000000, 29700000}, {50000000, 54000000}, {144000000, 148000000}, {219000000, 225000000}, {420000000, 450000000}, {902000000, 928000000}, {100000, 600000000}, {100000, 1000000000} };
+    const char* band_names[NUM_BANDS] = {F("2200m"), F("630m"), F("160m"), F("80m"), F("60m"), F("40m"), F("30m"), F("20m"), F("17m"), F("15m"), F("12m"), F("10m"), F("6m"), F("VHF"), F("1.25m"), F("UHF"), F("33cm"), F("Reference RF"), F("Full Range")};
+
     private:
-        size_t band_idx_;
-        const uint32_t band_fqs[NUM_BANDS][2] = { {135700, 137800}, {472000, 479000}, {1800000, 2000000}, {3500000, 4000000}, {5330500, 5406400}, {7000000, 7300000}, {10100000, 10150000}, {14000000, 14350000}, {18068000, 18168000}, {2100000, 21450000}, {24890000, 24990000}, {28000000, 29700000}, {50000000, 54000000}, {144000000, 148000000}, {219000000, 225000000}, {420000000, 450000000}, {902000000, 928000000}, {100000, 600000000} };
-        const char* band_names[NUM_BANDS] = {F("2200m"), F("630m"), F("160m"), F("80m"), F("60m"), F("40m"), F("30m"), F("20m"), F("17m"), F("15m"), F("12m"), F("10m"), F("6m"), F("VHF"), F("1.25m"), F("UHF"), F("33cm"), F("Reference RF")};
+    size_t band_idx_;
 };
 
 class FileBrowser {
@@ -280,8 +298,7 @@ class FileBrowser {
     }
 
     bool initialize(FsFile* directory, bool with_new) {
-        Serial.println("initializing file browser");
-        Serial.flush();
+        process_logger.debug(F("initializing file browser"));
 
         tft.fillScreen(BLACK);
         draw_title();
@@ -298,8 +315,7 @@ class FileBrowser {
 
         with_new_ = with_new;
 
-        Serial.println("counting files in directory");
-        Serial.flush();
+        process_logger.debug(F("counting files in directory"));
 
         // awkward to iterate through directory once to get count and a second
         // time to actually get the names into the array. not sure how else to
@@ -311,8 +327,7 @@ class FileBrowser {
             file_count++;
         }
 
-        Serial.println("allocating file options");
-        Serial.flush();
+        process_logger.debug(F("allocating file options"));
 
         size_t idx;
         if (with_new_) {
@@ -325,8 +340,7 @@ class FileBrowser {
             idx = 0;
         }
 
-        Serial.println("iterating through directory");
-        Serial.flush();
+        process_logger.debug(F("iterating through directory"));
 
         directory->rewindDirectory();
         while(entry.openNext(directory, O_RDONLY) && idx < file_count) {
@@ -337,9 +351,6 @@ class FileBrowser {
 
         file_menu_ = new Menu(NULL, file_options_, file_count);
 
-        Serial.println("drawing menu");
-        Serial.flush();
-
         draw_menu(file_menu_, -1, true);
         return true;
     }
@@ -347,8 +358,8 @@ class FileBrowser {
     bool choose_file() {
         if (click) {
             return true;
-        } else if (turn != 0) {
-            file_menu_->selected_option = constrain((int32_t)file_menu_->selected_option+turn, 0, file_menu_->option_count);
+        } else if (turn != 0 && file_menu_->option_count > 0) {
+            file_menu_->selected_option = constrain((int32_t)file_menu_->selected_option+turn, 0, file_menu_->option_count-1);
             draw_menu(file_menu_, -1, false);
             return false;
         } else {
@@ -383,19 +394,19 @@ class ConfirmDialog {
     bool progress() {
         if (progress_) {
             if(progress_fn_()) {
-                Serial.println("inner progress fn returned true, proceeding with confirmation.");
+                process_logger.debug(F("inner progress fn returned true, proceeding with confirmation."));
                 progress_ = false;
                 tft.fillScreen(BLACK);
                 tft.setCursor(CONFIRM_ORIG_X-6*TITLE_TEXT_SIZE, CONFIRM_ORIG_Y-8*TITLE_TEXT_SIZE);
-                tft.print("Are you sure?");
+                tft.print(F("Are you sure?"));
                 draw_title();
                 draw_menu(&confirmation_menu, -1, true, CONFIRM_ORIG_X, CONFIRM_ORIG_Y);
             }
         } else {
             if(click) {
                 return true;
-            } else if(turn != 0) {
-                confirmation_menu.selected_option = constrain((int32_t)confirmation_menu.selected_option+turn, 0, confirmation_menu.option_count);
+            } else if(turn != 0 && confirmation_menu.option_count > 0) {
+                confirmation_menu.selected_option = constrain((int32_t)confirmation_menu.selected_option+turn, 0, confirmation_menu.option_count-1);
                 draw_menu(&confirmation_menu, -1, false, CONFIRM_ORIG_X, CONFIRM_ORIG_Y);
             }
         }

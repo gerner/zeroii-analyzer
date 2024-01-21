@@ -12,9 +12,12 @@
 
 #include <SerialWombat.h>
 
+#include "log.h"
 #include "analyzer.h"
 #include "menu_manager.h"
 #include "persistence.h"
+
+Logger loop_logger("loop");
 
 #define WAIT_FOR_SERIAL 1
 
@@ -243,18 +246,29 @@ Menu root_menu(NULL, root_menu_options, sizeof(root_menu_options)/sizeof(root_me
 
 MenuManager menu_manager(&root_menu);
 
-uint32_t startFq = 28300000;
-uint32_t endFq = 28500000;
-uint16_t dotsNumber = 100;
+uint32_t start_fq = MIN_FQ;
+uint32_t end_fq = MAX_FQ;
+uint16_t step_count = MAX_STEPS/2;
+
+bool set_analysis_from_calibration() {
+    if(analyzer.calibration_len_ == 0) {
+        return false;
+    }
+
+    start_fq = constrain(analyzer.calibration_results_[0].fq, MIN_FQ, MAX_FQ);
+    end_fq = constrain(analyzer.calibration_results_[analyzer.calibration_len_-1].fq, MIN_FQ, MAX_FQ);
+    step_count = constrain(analyzer.calibration_len_, 1, MAX_STEPS);
+    return true;
+}
 
 void draw_title() {
     tft.fillRect(0, 0, tft.width(), 8*TITLE_TEXT_SIZE, BLACK);
     tft.setCursor(0,0);
     tft.setTextSize(TITLE_TEXT_SIZE);
 
-    tft.print(frequency_formatter(startFq) + "-" + frequency_formatter(endFq));
+    tft.print(frequency_formatter(start_fq) + "-" + frequency_formatter(end_fq));
     tft.print(" St:");
-    tft.print(dotsNumber);
+    tft.print(step_count);
     tft.print(" Z0:");
     tft.print((uint32_t)analyzer.z0_);
 
@@ -346,6 +360,7 @@ void draw_menu(Menu* current_menu, int current_option, bool fresh=true, int16_t 
 }
 
 void menu_back() {
+    loop_logger.info(F("menu back"));
     leave_option(menu_manager.current_option_);
     clear_menu(menu_manager.current_menu_);
     menu_manager.collapse();
@@ -383,30 +398,6 @@ int32_t set_user_value(int32_t current_value, int32_t min_value, int32_t max_val
     return current_value;
 }
 
-uint16_t frequency_step(uint32_t fq) {
-    if (fq > 1 * 1000 * 1000 * 1000) {
-        return 1 * 1000 * 1000;
-    } else if (fq > 1 * 1000 * 1000) {
-        return 1 * 1000;
-    } else if (fq > 1 * 1000) {
-        return 1;
-    } else {
-        return 1;
-    }
-}
-
-String frequency_parts_formatter(const uint32_t fq) {
-    uint16_t ghz_part, mhz_part, khz_part, hz_part;
-    char buf[1+3*4+3+1];
-    ghz_part = fq / 1000 / 1000 / 1000;
-    mhz_part = fq / 1000 / 1000 % 1000ul;
-    khz_part = fq / 1000 % 1000ul;
-    hz_part  = fq % 1000ul;
-
-    snprintf(buf, sizeof(buf), "%d.%03d.%03d.%03d Hz", ghz_part, mhz_part, khz_part, hz_part);
-    return String(buf);
-}
-
 /*************
  * A set of state machines to handle different kinds of activities that cross
  * loop invocations.
@@ -425,64 +416,73 @@ bool browse_progress() {
     return file_browser->choose_file();
 }
 
-void analyze(uint32_t startFq, uint32_t endFq, uint16_t dotsNumber, AnalysisPoint* results) {
-    uint32_t fq = startFq;
-    uint32_t stepFq = (endFq - startFq)/dotsNumber;
-
-    Serial.println(String("analyzing startFq ")+startFq+" endFq "+endFq+" dotsNumber "+dotsNumber);
-
-    for(size_t i = 0; i <= dotsNumber; ++i, fq+=stepFq)
-    {
-        Serial.println(String("analyzing fq ")+fq);
-        Complex z = analyzer.uncalibrated_measure(fq);
-        Serial.println("putting into results array");
-        Serial.flush();
-        results[i] = AnalysisPoint(fq, z);
-    }
-    Serial.println("analysis complete");
-}
-
 void enter_option(int32_t option_id) {
+    loop_logger.debug(String("entering ")+option_id);
     switch(option_id) {
         case MOPT_ANALYZE:
-            analysis_results_len = dotsNumber;
+            analysis_results_len = step_count;
             analysis_processor = new AnalysisProcessor();
-            analysis_processor->initialize(startFq, endFq, dotsNumber, analysis_results);
+            if(analysis_processor == NULL) {
+                loop_logger.error(F("could not make an AnalysisProcessor"));
+            }
+            analysis_processor->initialize(start_fq, end_fq, step_count, analysis_results);
             break;
         case MOPT_FQCENTER: {
-            int32_t centerFq = startFq + (endFq-startFq)/2;
+            int32_t centerFq = start_fq + (end_fq-start_fq)/2;
             fq_setter = new FqSetter();
+            if(fq_setter == NULL) {
+                loop_logger.error("could not make an FqSetter");
+            }
             fq_setter->initialize(centerFq);
             break;
         }
         case MOPT_FQWINDOW: {
-            int32_t rangeFq = endFq - startFq;
+            int32_t rangeFq = end_fq - start_fq;
             fq_setter = new FqSetter();
+            if(fq_setter == NULL) {
+                loop_logger.error("could not make an FqSetter");
+            }
             fq_setter->initialize(rangeFq);
             break;
         }
         case MOPT_FQSTART: {
+            assert(fq_setter == NULL);
             fq_setter = new FqSetter();
-            fq_setter->initialize(startFq);
+            if(fq_setter == NULL) {
+                loop_logger.error("could not make an FqSetter");
+            }
+            fq_setter->initialize(start_fq);
             break;
         }
         case MOPT_FQEND: {
             fq_setter = new FqSetter();
-            fq_setter->initialize(endFq);
+            if(fq_setter == NULL) {
+                loop_logger.error("could not make an FqSetter");
+            }
+            fq_setter->initialize(end_fq);
             break;
         }
         case MOPT_FQBAND:
             band_setter = new BandSetter();
+            if(band_setter == NULL) {
+                loop_logger.error("could not make an BandSetter");
+            }
             band_setter->initialize();
             break;
         case MOPT_CALIBRATE:
-            calibration_len = dotsNumber;
+            calibration_len = step_count;
             calibrator = new Calibrator(&analyzer);
-            calibrator->initialize(startFq, endFq, dotsNumber, calibration_results);
+            if(calibrator == NULL) {
+                loop_logger.error("could not make a Calibrator");
+            }
+            calibrator->initialize(start_fq, end_fq, step_count, calibration_results);
             break;
         case MOPT_SWR: {
             swr_i = 0;
             graph_context = new GraphContext();
+            if(graph_context == NULL) {
+                loop_logger.error("could not make a GraphContext");
+            }
             graph_context->graph_swr(analysis_results, analysis_results_len, &analyzer);
             graph_context->draw_swr_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
             graph_context->draw_swr_title(analysis_results, analysis_results_len, swr_i, &analyzer);
@@ -492,6 +492,9 @@ void enter_option(int32_t option_id) {
             swr_i = 0;
 
             graph_context = new GraphContext();
+            if(graph_context == NULL) {
+                loop_logger.error("could not make a GraphContext");
+            }
             graph_context->graph_smith(analysis_results, analysis_results_len, &analyzer);
             graph_context->draw_smith_pointer(analysis_results, analysis_results_len, swr_i, &analyzer);
             graph_context->draw_smith_title(analysis_results, analysis_results_len, swr_i, &analyzer);
@@ -499,49 +502,74 @@ void enter_option(int32_t option_id) {
         }
         case MOPT_SAVE_RESULTS:
             file_browser = new FileBrowser();
+            if(file_browser == NULL) {
+                loop_logger.error("could not make a FileBrowser");
+            }
             file_browser->initialize(&persistence.results_dir_, true);
             confirm_dialog = new ConfirmDialog();
+            if(confirm_dialog == NULL) {
+                loop_logger.error("could not make a ConfirmDialog");
+            }
             confirm_dialog->initialize(&browse_progress);
             break;
         case MOPT_LOAD_RESULTS:
             file_browser = new FileBrowser();
+            if(file_browser == NULL) {
+                loop_logger.error("could not make a FileBrowser");
+            }
             file_browser->initialize(&persistence.results_dir_, false);
             confirm_dialog = new ConfirmDialog();
+            if(confirm_dialog == NULL) {
+                loop_logger.error("could not make a ConfirmDialog");
+            }
             confirm_dialog->initialize(&browse_progress);
             break;
         case MOPT_SAVE_SETTINGS:
             file_browser = new FileBrowser();
+            if(file_browser == NULL) {
+                loop_logger.error("could not make a FileBrowser");
+            }
             file_browser->initialize(&persistence.settings_dir_, true);
             confirm_dialog = new ConfirmDialog();
+            if(confirm_dialog == NULL) {
+                loop_logger.error("could not make a ConfirmDialog");
+            }
             confirm_dialog->initialize(&browse_progress);
             break;
         case MOPT_LOAD_SETTINGS:
             file_browser = new FileBrowser();
+            if(file_browser == NULL) {
+                loop_logger.error("could not make a FileBrowser");
+            }
             file_browser->initialize(&persistence.settings_dir_, false);
             confirm_dialog = new ConfirmDialog();
+            if(confirm_dialog == NULL) {
+                loop_logger.error("could not make a ConfirmDialog");
+            }
             confirm_dialog->initialize(&browse_progress);
             break;
     }
 }
 
 void leave_option(int32_t option_id) {
+    loop_logger.debug(String("leaving ")+option_id);
     switch(option_id) {
         case MOPT_FQCENTER:
-            Serial.println(String("setting center fq to: ") + fq_setter->fq());
-            // move [startFq, endFq] so it's centered on desired value
-            startFq = constrain(fq_setter->fq() - (endFq - startFq)/2, MIN_FQ, MAX_FQ);
-            endFq = constrain(fq_setter->fq() + (endFq - startFq)/2, MIN_FQ, MAX_FQ);
+            loop_logger.info(String("setting center fq to: ") + fq_setter->fq());
+            // move [start_fq, end_fq] so it's centered on desired value
+            /*start_fq = constrain(fq_setter->fq() - (end_fq - start_fq)/2, MIN_FQ, MAX_FQ);
+            end_fq = constrain(fq_setter->fq() + (end_fq - start_fq)/2, MIN_FQ, MAX_FQ);*/
             delete fq_setter;
             fq_setter = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_FQWINDOW: {
-            Serial.println(String("setting window fq to: ") + fq_setter->fq());
-            // narrow/expand [startFq, endFq] remaining centered
-            int32_t cntFq = startFq + (endFq - startFq)/2;
-            startFq = constrain(cntFq - fq_setter->fq()/2, MIN_FQ, MAX_FQ);
-            endFq = constrain(cntFq + fq_setter->fq()/2, MIN_FQ, MAX_FQ);
+            loop_logger.info(String("setting window fq to: ") + fq_setter->fq());
+            // narrow/expand [start_fq, end_fq] remaining centered
+            int32_t cntFq = start_fq + (end_fq - start_fq)/2;
+            start_fq = constrain(cntFq - fq_setter->fq()/2, MIN_FQ, MAX_FQ);
+            end_fq = constrain(cntFq + fq_setter->fq()/2, MIN_FQ, MAX_FQ);
             delete fq_setter;
             fq_setter = NULL;
             tft.fillScreen(BLACK);
@@ -549,26 +577,26 @@ void leave_option(int32_t option_id) {
             break;
         }
         case MOPT_FQSTART:
-            Serial.println(String("setting start fq to: ") + fq_setter->fq());
-            startFq = fq_setter->fq();
-            endFq = constrain(endFq, startFq+1, MAX_FQ);
+            loop_logger.info(String("setting start fq to: ") + fq_setter->fq());
+            start_fq = fq_setter->fq();
+            end_fq = constrain(end_fq, start_fq+1, MAX_FQ);
             delete fq_setter;
             fq_setter = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_FQEND:
-            Serial.println(String("setting end fq to: ") + fq_setter->fq());
-            endFq = fq_setter->fq();
-            startFq = constrain(startFq, MIN_FQ, endFq-1);
+            loop_logger.info(String("setting end fq to: ") + fq_setter->fq());
+            end_fq = fq_setter->fq();
+            start_fq = constrain(start_fq, MIN_FQ, end_fq-1);
             delete fq_setter;
             fq_setter = NULL;
             tft.fillScreen(BLACK);
             draw_title();
             break;
         case MOPT_FQBAND:
-            band_setter->band(&startFq, &endFq);
-            Serial.println(String("setting start/end to: ") + startFq + "/" + endFq);
+            band_setter->band(&start_fq, &end_fq);
+            loop_logger.info(String("setting start/end to: ") + start_fq + "/" + end_fq);
             delete band_setter;
             band_setter = NULL;
             tft.fillScreen(BLACK);
@@ -591,19 +619,19 @@ void leave_option(int32_t option_id) {
             if(confirm_dialog->confirm()) {
                 if(file_browser->is_new()) {
                     if(!persistence.save_results(analysis_results, analysis_results_len)) {
-                        Serial.println("could not save results");
+                        loop_logger.error(F("could not save results"));
                         current_error("could not save results");
                     }
                 } else {
                     char filename[128];
                     file_browser->file(filename, sizeof(filename));
                     if(!persistence.save_results(filename, analysis_results, analysis_results_len)) {
-                        Serial.println("could not save results");
+                        loop_logger.error(F("could not save results"));
                         current_error("could not save results");
                     }
                 }
             } else {
-                Serial.println("cancelled saving results");
+                loop_logger.info(F("cancelled saving results"));
                 current_error("cancelled saving results");
             }
             delete file_browser;
@@ -618,11 +646,11 @@ void leave_option(int32_t option_id) {
                 char filename[128];
                 file_browser->file(filename, sizeof(filename));
                 if(!persistence.load_results(filename, analysis_results, &analysis_results_len, MAX_STEPS)) {
-                    Serial.println("could not load results");
+                    loop_logger.error(F("could not load results"));
                     current_error("could not load results");
                 }
             } else {
-                Serial.println("cancelled loading results");
+                loop_logger.info(F("cancelled loading results"));
                 current_error("cancelled loading results");
             }
             delete file_browser;
@@ -636,19 +664,19 @@ void leave_option(int32_t option_id) {
             if(confirm_dialog->confirm()) {
                 if(file_browser->is_new()) {
                     if(!persistence.save_settings(&analyzer)) {
-                        Serial.println("could not save settings");
+                        loop_logger.error(F("could not save settings"));
                         current_error("could not save settings");
                     }
                 } else {
                     char filename[128];
                     file_browser->file(filename, sizeof(filename));
                     if(!persistence.save_settings(filename, &analyzer)) {
-                        Serial.println("could not save settings");
+                        loop_logger.error(F("could not save settings"));
                         current_error("could not save settings");
                     }
                 }
             } else {
-                Serial.println("cancelled saving settings");
+                loop_logger.info(F("cancelled saving settings"));
                 current_error("cancelled saving settings");
             }
             delete file_browser;
@@ -663,11 +691,13 @@ void leave_option(int32_t option_id) {
                 char filename[128];
                 file_browser->file(filename, sizeof(filename));
                 if(!persistence.load_settings(filename, &analyzer, MAX_STEPS)) {
-                    Serial.println("could not load settings");
+                    loop_logger.error(F("could not load settings"));
                     current_error("could not load settings");
+                } else {
+                    set_analysis_from_calibration();
                 }
             } else {
-                Serial.println("cancelled loading settings");
+                loop_logger.info(F("cancelled loading settings"));
                 current_error("cancelled loading settings");
             }
             delete file_browser;
@@ -721,7 +751,7 @@ void handle_option() {
             if (analysis_processor->analyze()) {
                 menu_back();
                 if(!menu_manager.select_option(MOPT_SWR)) {
-                    Serial.println("could not find SWR option");
+                    loop_logger.error(F("could not find SWR option"));
                 } else {
                     choose_option();
                 }
@@ -730,7 +760,7 @@ void handle_option() {
         case MOPT_SWR:
             if (click) {
                 menu_back();
-            } else if (turn != 0) {
+            } else if (turn != 0 && analysis_results_len > 0) {
                 // move the "pointer" on the swr graph
                 swr_i = constrain((int32_t)swr_i+turn, 0, analysis_results_len-1);
                 assert(swr_i < analysis_results_len);
@@ -741,7 +771,7 @@ void handle_option() {
         case MOPT_SMITH:
             if (click) {
                 menu_back();
-            } else if (turn != 0) {
+            } else if (turn != 0 && analysis_results_len > 0) {
                 // move the "pointer" on the smith chart
                 swr_i = constrain((int32_t)swr_i+turn, 0, analysis_results_len-1);
                 assert(swr_i < analysis_results_len);
@@ -758,16 +788,24 @@ void handle_option() {
             }
             break;
         case MOPT_FQCENTER:
-            fq_setter->set_fq_value(MIN_FQ, MAX_FQ, "Center Frequency");
+            if(fq_setter->set_fq_value(MIN_FQ, MAX_FQ, "Center Frequency")) {
+                menu_back();
+            }
             break;
         case MOPT_FQWINDOW:
-            fq_setter->set_fq_value(0, MAX_FQ/2, "Frequency Range");
+            if(fq_setter->set_fq_value(0, MAX_FQ/2, "Frequency Range")) {
+                menu_back();
+            }
             break;
         case MOPT_FQSTART:
-            fq_setter->set_fq_value(MIN_FQ, MAX_FQ, "Start Frequency");
+            if(fq_setter->set_fq_value(MIN_FQ, MAX_FQ, "Start Frequency")) {
+                menu_back();
+            }
             break;
         case MOPT_FQEND:
-            fq_setter->set_fq_value(MIN_FQ, MAX_FQ, "End Frequency");
+            if(fq_setter->set_fq_value(MIN_FQ, MAX_FQ, "End Frequency")) {
+                menu_back();
+            }
             break;
         case MOPT_FQBAND:
             if (band_setter->set_band()) {
@@ -776,7 +814,7 @@ void handle_option() {
             }
             break;
         case MOPT_FQSTEPS:
-            dotsNumber = set_user_value(dotsNumber, 1, 128, "Steps");
+            step_count = set_user_value(step_count, 1, 128, "Steps");
             break;
         case MOPT_CALIBRATE: {
             if(calibrator->calibration_step()) {
@@ -788,7 +826,7 @@ void handle_option() {
             analyzer.z0_ = set_user_value(analyzer.z0_, 1, 999, "Z0");
             break;
         default:
-            Serial.println(String("don't know what to do with option ")+menu_manager.current_option_);
+            loop_logger.error(String("don't know what to do with option ")+menu_manager.current_option_);
             menu_back();
             break;
     }
@@ -872,11 +910,11 @@ void setup() {
     init_vbatt();
     current_error("");
 
-    Serial.println("starting TFT...");
+    loop_logger.info(F("starting TFT..."));
 
     uint16_t tft_id = tft.readID();
     if (tft_id != 0x8357) {
-        Serial.print("got unexpected tft id 0x");
+        loop_logger.error(F("got unexpected tft id 0x"));
         Serial.println(tft_id, HEX);
         setup_failed();
     }
@@ -886,85 +924,93 @@ void setup() {
     tft.setCursor(0, 0);
     tft.setTextColor(WHITE);
     tft.setTextSize(2);
-    Serial.println("TFT started.");
-    tft.println("Initializing...");
+    loop_logger.info(F("TFT started."));
+    tft.println(F("Initializing..."));
 
-    Serial.println("starting RTC...");
-    tft.println("starting RTC...");
+    loop_logger.info(F("starting RTC..."));
+    tft.println(F("starting RTC..."));
     if (!rtc.begin()) {
         delay(100);
         if(!rtc.begin()) {
-            Serial.println("RTC failed to begin");
-            tft.println("RTC failed to begin");
+            loop_logger.error(F("RTC failed to begin"));
+            tft.println(F("RTC failed to begin"));
             setup_failed();
         }
     }
 
     if (rtc.lostPower()) {
-        Serial.println("RTC lost power, let's set the time!");
+        loop_logger.warn(F("RTC lost power, let's set the time!"));
         // following line sets the RTC to the date & time this sketch was compiled
         rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
     }
 
-    Serial.println("starting SD...");
-    tft.println("starting SD...");
+    loop_logger.info(F("starting SD..."));
+    tft.println(F("starting SD..."));
     if(!sd.begin(SdSpiConfig(10, DEDICATED_SPI, SPI_HALF_SPEED))) {
-        Serial.println("SD failed to begin");
-        tft.println("SD failed to start");
+        loop_logger.error(F("SD failed to begin"));
+        tft.println(F("SD failed to start"));
         setup_failed();
     }
     FsDateTime::setCallback(date_callback);
 
-    Serial.println("starting ZEROII...");
-    tft.println("Starting ZEROII...");
+    loop_logger.info(F("starting ZEROII..."));
+    tft.println(F("Starting ZEROII..."));
     if(!analyzer.zeroii_.startZeroII()) {
-        Serial.println("failed to start zeroii");
-        tft.println("Failed to start ZeroII. Aborting.");
+        loop_logger.error(F("failed to start zeroii"));
+        tft.println(F("Failed to start ZeroII. Aborting."));
         setup_failed();
         return;
     }
     String str = "Version: ";
-    Serial.println(str + analyzer.zeroii_.getMajorVersion() + "." + analyzer.zeroii_.getMinorVersion() +
+    loop_logger.info(str + analyzer.zeroii_.getMajorVersion() + "." + analyzer.zeroii_.getMinorVersion() +
             ", HW Revision: " + analyzer.zeroii_.getHwRevision() +
             ", SN: " + analyzer.zeroii_.getSerialNumber()
     );
-    Serial.println("ZEROII started.");
+    loop_logger.info(F("ZEROII started."));
 
-    Serial.println("starting serial wombat...");
+    loop_logger.info(F("starting serial wombat..."));
     if(!sw.begin(Wire, 0x6C)) {
-        Serial.println("serial wombat failed to begin");
-        tft.println("serial wombat failed to start");
+        loop_logger.error(F("serial wombat failed to begin"));
+        tft.println(F("serial wombat failed to start"));
         setup_failed();
     }
     uint32_t sw_version = sw.readVersion_uint32();
     if (sw_version == 0) {
-        Serial.println(String("serial wombat version was bad: ")+sw_version);
+        loop_logger.error(String("serial wombat version was bad: ")+sw_version);
     }
-    Serial.println(String("serial wombat version: ")+sw_version+" '"+sw.readVersion()+"'");
+    loop_logger.info(String("serial wombat version: ")+sw_version+" '"+sw.readVersion()+"'");
     quad_enc.begin(2, 1, 10, false, QE_ONLOW_POLL);
     quad_enc.read(32768);
     debounced_input.begin(0, 30, false, false);
     debounced_input.readTransitionsState();
 
-    Serial.println("checking for settings...");
+    loop_logger.info(F("setting some initial start/end fq"));
+    {
+        BandSetter bs;
+        start_fq = bs.band_fqs[BAND_10M][0];
+        end_fq = bs.band_fqs[BAND_10M][1];
+    }
+
+    loop_logger.info(F("checking for settings..."));
     if(!persistence.begin()) {
-        Serial.println("persistence failed to begin");
-        tft.println("persistence failed to start");
+        loop_logger.error(F("persistence failed to begin"));
+        tft.println(F("persistence failed to start"));
         setup_failed();
     }
     if(!persistence.load_settings(&analyzer, MAX_STEPS)) {
-        Serial.println("could not load existing settings");
+        loop_logger.error(F("could not load existing settings"));
     } else {
-        Serial.println("loaded settings");
+        set_analysis_from_calibration();
+        loop_logger.info(F("loaded settings"));
     }
     if(!persistence.load_results(analysis_results, &analysis_results_len, MAX_STEPS)) {
-        Serial.println("could not load existing results");
+        loop_logger.error(F("could not load existing results"));
     } else {
-        Serial.println("loaded results");
+        loop_logger.info(F("loaded results"));
     }
 
-    Serial.println("Initialization complete.");
-    tft.println("Initializing complete.");
+    loop_logger.info(F("Initialization complete."));
+    tft.println(F("Initializing complete."));
 
     tft.fillScreen(BLACK);
     draw_title();
@@ -972,10 +1018,13 @@ void setup() {
 }
 
 void loop() {
+    loop_logger.debug(F("entering loop"));
     uint32_t now = millis();
     if (last_vbatt + BATT_SENSE_PERIOD < now) {
+        //loop_logger.debug("updating battery measurement");
         update_vbatt();
         draw_vbatt();
+        //loop_logger.debug("battery measurement updated");
     }
 
     if (error_message[0] && now - last_error_time > ERROR_MESSAGE_DWELL_TIME) {
@@ -999,8 +1048,6 @@ void loop() {
     }
 
     handle_option();
-    // TODO: if we're in a measurement, allow cancelling it by clicking
-    //delay(50);
 }
 
 /*

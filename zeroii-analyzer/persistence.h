@@ -40,6 +40,7 @@ public:
         switch(state_) {
             case SETTINGS_START:
                 if (k == "z0") {
+                    state_ = SETTINGS_Z0;
                 } else if(k == "calibration") {
                     state_ = SETTINGS_CAL;
                 }
@@ -73,10 +74,12 @@ public:
             case SETTINGS_Z0:
                 z0_ = atof(v.c_str());
                 state_ = SETTINGS_START;
+                saw_z0_ = true;
                 break;
             case SETTINGS_CAL_FQ:
                 calibration_results_[calibration_len_].fq = atoi(v.c_str());
                 state_ = SETTINGS_CAL_POINT;
+                saw_fq_ = true;
                 break;
             case SETTINGS_CAL_S_R:
             case SETTINGS_CAL_O_R:
@@ -181,7 +184,8 @@ public:
             case SETTINGS_CAL_POINT:
                 if (!(saw_fq_ && saw_cal_short_ && saw_cal_open_ && saw_cal_load_)) {
                     has_error_ = true;
-                    persistence_logger.warn("didn't see all required elements in calibration point");
+                    persistence_logger.warn(F("didn't see all required elements in calibration point"));
+                    persistence_logger.warn(String("point: ")+calibration_len_);
                 } else {
                     state_ = SETTINGS_CAL;
                     calibration_len_++;
@@ -241,6 +245,7 @@ public:
     void initialize() {
         results_len_ = 0;
         state_ = RESULTS_START;
+        has_error_ = false;
     }
 
     void key(String k) {
@@ -291,7 +296,7 @@ public:
             return;
         }
         switch(state_) {
-            case RESULTS_POINT:
+            case RESULTS_START:
                 break;
             case RESULTS_Z:
                 state_ = RESULTS_Z_R;
@@ -308,8 +313,6 @@ public:
         }
         switch(state_) {
             case RESULTS_START:
-                break;
-            case RESULTS_POINT:
                 break;
             case RESULTS_Z_I:
                 state_ = RESULTS_POINT;
@@ -397,8 +400,9 @@ class AnalyzerPersistence {
             return false;
         }
 
+        char buf[32];
         entry.write("{\"z0\":");
-        entry.write(analyzer->z0_);
+        entry.write(dtostrf(analyzer->z0_, 1, 6, buf));
 
         entry.write(",\"calibration\":[");
         bool is_first = true;
@@ -409,24 +413,24 @@ class AnalyzerPersistence {
                 is_first = false;
             }
             entry.write("{\"fq\":");
-            entry.write(analyzer->calibration_results_[i].fq);
+            entry.write(itoa(analyzer->calibration_results_[i].fq, buf, 10));
 
             entry.write(",\"cal_short\":[");
-            entry.write(analyzer->calibration_results_[i].cal_short.real());
+            entry.write(dtostrf(analyzer->calibration_results_[i].cal_short.real(), 1, 6, buf));
             entry.write(",");
-            entry.write(analyzer->calibration_results_[i].cal_short.imag());
+            entry.write(dtostrf(analyzer->calibration_results_[i].cal_short.imag(), 1, 6, buf));
             entry.write("]");
 
             entry.write(",\"cal_open\":[");
-            entry.write(analyzer->calibration_results_[i].cal_open.real());
+            entry.write(dtostrf(analyzer->calibration_results_[i].cal_open.real(), 1, 6, buf));
             entry.write(",");
-            entry.write(analyzer->calibration_results_[i].cal_open.imag());
+            entry.write(dtostrf(analyzer->calibration_results_[i].cal_open.imag(), 1, 6, buf));
             entry.write("]");
 
             entry.write(",\"cal_load\":[");
-            entry.write(analyzer->calibration_results_[i].cal_load.real());
+            entry.write(dtostrf(analyzer->calibration_results_[i].cal_load.real(), 1, 6, buf));
             entry.write(",");
-            entry.write(analyzer->calibration_results_[i].cal_load.imag());
+            entry.write(dtostrf(analyzer->calibration_results_[i].cal_load.imag(), 1, 6, buf));
             entry.write("]");
 
             entry.write("}");
@@ -445,10 +449,16 @@ class AnalyzerPersistence {
         listener.initialize();
         parser.setListener(&listener);
 
-        char c;
-        while(c = entry->read()) {
+        int c;
+        while((c = entry->read()) >= 0) {
             parser.parse(c);
         }
+
+        if(entry->available() > 0) {
+            persistence_logger.error(String("failed to read settings file error ")+entry->getError());
+            return false;
+        }
+
 
         if (listener.has_error_) {
             persistence_logger.error("failed to load settings");
@@ -516,6 +526,7 @@ class AnalyzerPersistence {
 
         entry.write("[");
         bool is_first = true;
+        char buf[32];
         for(size_t i; i<results_len; i++) {
             if(!is_first) {
                 entry.write(",");
@@ -523,12 +534,12 @@ class AnalyzerPersistence {
                 is_first = false;
             }
             entry.write("{\"fq\":");
-            entry.write(results[i].fq);
+            entry.write(itoa(results[i].fq, buf, 10));
 
             entry.write(",\"uncal_z\":[");
-            entry.write(results[i].uncal_z.real());
+            entry.write(dtostrf(results[i].uncal_z.real(), 1, 6, buf));
             entry.write(",");
-            entry.write(results[i].uncal_z.imag());
+            entry.write(dtostrf(results[i].uncal_z.imag(), 1, 6, buf));
             entry.write("]");
         }
         entry.write("]");
@@ -543,9 +554,14 @@ class AnalyzerPersistence {
         listener.initialize();
         parser.setListener(&listener);
 
-        char c;
-        while(c = entry->read()) {
+        int c;
+        while((c = entry->read()) >= 0) {
             parser.parse(c);
+        }
+
+        if(entry->available() > 0) {
+            persistence_logger.error(String("failed to read results file error ")+entry->getError());
+            return false;
         }
 
         if(listener.has_error_) {
