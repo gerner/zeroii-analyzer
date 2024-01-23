@@ -17,7 +17,7 @@
 
 Logger loop_logger("loop");
 
-#define WAIT_FOR_SERIAL 1
+#define WAIT_FOR_SERIAL 0
 
 #define VBATT_ALPHA 0.05
 #define BATT_SENSE_PIN A3

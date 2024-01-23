@@ -31,6 +31,14 @@ public:
         has_error_ = false;
         calibration_len_ = 0;
         saw_z0_ = false;
+        saw_end_ = false;
+    }
+
+    void complete() {
+        if(!saw_end_) {
+            persistence_logger.warn("never saw valid end of document");
+            has_error_ = true;
+        }
     }
 
     void key(String k) {
@@ -206,8 +214,13 @@ public:
         }
         if (!saw_z0_) {
             has_error_ = true;
-            persistence_logger.warn("didn't see z0");
+            persistence_logger.warn(F("didn't see z0"));
         }
+        if (state_ != SETTINGS_START) {
+            has_error_ = true;
+            persistence_logger.warn(String("end document in wrong state: ")+state_);
+        }
+        saw_end_ = true;
     }
 
     void whitespace(char c) {
@@ -227,6 +240,7 @@ private:
     bool saw_cal_short_;
     bool saw_cal_open_;
     bool saw_cal_load_;
+    bool saw_end_;
 };
 
 enum ResultsListenerState { RESULTS_START, RESULTS_POINT, RESULTS_FQ, RESULTS_Z, RESULTS_Z_R, RESULTS_Z_I };
@@ -246,6 +260,14 @@ public:
         results_len_ = 0;
         state_ = RESULTS_START;
         has_error_ = false;
+        saw_end_ = false;
+    }
+
+    void complete() {
+        if(!saw_end_) {
+            persistence_logger.warn("never saw valid end of document");
+            has_error_ = true;
+        }
     }
 
     void key(String k) {
@@ -359,6 +381,7 @@ public:
                 } else {
                     results_len_++;
                 }
+                state_ = RESULTS_START;
                 break;
             default:
                 has_error_ = true;
@@ -367,9 +390,16 @@ public:
     }
 
     void startDocument() {
+        persistence_logger.info("startDocument");
     }
 
     void endDocument() {
+        if(state_ != RESULTS_START) {
+            persistence_logger.warn(String("results doc ended not in correct state: ")+state_);
+            has_error_ = true;
+        } else {
+            saw_end_ = true;
+        }
     }
 
     void whitespace(char c) {
@@ -384,6 +414,7 @@ private:
     size_t max_steps_;
     bool saw_fq_;
     bool saw_z_;
+    bool saw_end_;
 };
 
 #define DEFAULT_ANALYZER_PERSISTENCE_NAME "zeroii-analyzer"
@@ -458,7 +489,7 @@ class AnalyzerPersistence {
             persistence_logger.error(String("failed to read settings file error ")+entry->getError());
             return false;
         }
-
+        listener.complete();
 
         if (listener.has_error_) {
             persistence_logger.error("failed to load settings");
@@ -540,7 +571,7 @@ class AnalyzerPersistence {
             entry.write(dtostrf(results[i].uncal_z.real(), 1, 6, buf));
             entry.write(",");
             entry.write(dtostrf(results[i].uncal_z.imag(), 1, 6, buf));
-            entry.write("]");
+            entry.write("]}");
         }
         entry.write("]");
 
@@ -563,6 +594,7 @@ class AnalyzerPersistence {
             persistence_logger.error(String("failed to read results file error ")+entry->getError());
             return false;
         }
+        listener.complete();
 
         if(listener.has_error_) {
             persistence_logger.error("failed to load results");

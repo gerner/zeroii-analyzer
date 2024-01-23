@@ -596,8 +596,6 @@ void shellfn_date(size_t argc, char* argv[]) {
     }
 }
 
-#define SHELL_COMMANDS_SIZE 
-
 const char* SHELL_COMMANDS[] = {
     "help",
     "reset",
