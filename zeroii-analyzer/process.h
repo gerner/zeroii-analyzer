@@ -3,7 +3,7 @@
 
 #include "log.h"
 
-Logger process_logger("process", LOG_DEBUG);
+Logger process_logger("process");
 
 class AnalysisProcessor {
     public:
@@ -282,8 +282,16 @@ class FqSetter {
 #define BAND_10M 11
 class BandSetter {
     public:
-    void initialize() {
-        band_idx_ = 0;
+    void initialize(uint32_t start_fq, uint32_t end_fq) {
+        // try and find the matching band if there is one
+        for(band_idx_=0; band_idx_ < NUM_BANDS; band_idx_++) {
+            if(band_fqs[band_idx_][0] == start_fq && band_fqs[band_idx_][1] == end_fq) {
+                break;
+            }
+        }
+        if(band_idx_ == NUM_BANDS) {
+            band_idx_ = 0;
+        }
         tft.fillScreen(BLACK);
         draw_title();
         tft.setCursor(0, 5*2*8);
@@ -317,6 +325,57 @@ class BandSetter {
 
     private:
     size_t band_idx_;
+};
+
+class UserValueSetter {
+    public:
+    UserValueSetter() {
+    }
+
+    void initialize(String label, int32_t initial_value, int32_t min_value, int32_t max_value) {
+        label_ = label;
+        value_ = initial_value;
+        min_value_ = min_value;
+        max_value_ = max_value;
+
+        tft.fillScreen(BLACK);
+        draw_title();
+
+        /*tft.setTextSize(3);
+        tft.fillRect(0, 5*2*8, tft.width(), 2*8*3, BLACK);
+        tft.setCursor(0, 5*2*8);
+        tft.print(label_);
+        tft.println(":");
+        tft.print("    ");
+        tft.println(value_);*/
+        initialize_progress_meter(label_);
+        draw_progress_meter(max_value_, value_, min_value_);
+    }
+
+    bool set_value() {
+        if (click) {
+            return true;
+        }
+        // rotating changes value
+        if (turn != 0) {
+            value_ = constrain(value_ + turn, min_value_, max_value_);
+            /*tft.setTextSize(3);
+            tft.fillRect(0, 5*2*8, tft.width(), 2*8*3, BLACK);
+            tft.setCursor(0, 5*2*8);
+            tft.print(label_);
+            tft.println(":");
+            tft.print("    ");
+            tft.println(value_);*/
+            draw_progress_meter(max_value_, value_, min_value_);
+        }
+        return false;
+    }
+
+    int32_t value_;
+    private:
+    String label_;
+    int32_t min_value_;
+    int32_t max_value_;
 };
 
 class FileBrowser {

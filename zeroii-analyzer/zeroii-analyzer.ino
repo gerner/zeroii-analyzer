@@ -150,13 +150,17 @@ void initialize_progress_meter(String label) {
     tft.drawRect(PROGRESS_METER_X, PROGRESS_METER_Y+8*2, PROGRESS_METER_WIDTH, 7*2, WHITE);
 }
 
-void draw_progress_meter(size_t total, size_t current) {
-    tft.fillRect(PROGRESS_METER_X, PROGRESS_METER_Y+8*2, PROGRESS_METER_WIDTH*current/total, 7*2, WHITE);
+void draw_progress_meter(size_t total, size_t current, size_t min_value=0) {
+    tft.fillRect(PROGRESS_METER_X, PROGRESS_METER_Y+8*2, PROGRESS_METER_WIDTH, 7*2, BLACK);
+    tft.drawRect(PROGRESS_METER_X, PROGRESS_METER_Y+8*2, PROGRESS_METER_WIDTH, 7*2, WHITE);
+    tft.fillRect(PROGRESS_METER_X, PROGRESS_METER_Y+8*2, PROGRESS_METER_WIDTH*(current-min_value)/(total-min_value), 7*2, WHITE);
     tft.fillRect(PROGRESS_METER_X, PROGRESS_METER_Y+8*2*2, PROGRESS_METER_WIDTH, 8*2, BLACK);
     tft.setCursor(PROGRESS_METER_X, PROGRESS_METER_Y+8*2*2);
     tft.print(current);
-    tft.print("/");
-    tft.print(total);
+    if (min_value == 0) {
+        tft.print("/");
+        tft.print(total);
+    }
 }
 
 RTC_DS3231 rtc;
@@ -360,10 +364,11 @@ void draw_menu(Menu* current_menu, int current_option, bool fresh=true, int16_t 
 }
 
 void menu_back() {
-    loop_logger.info(F("menu back"));
+    loop_logger.debug(F("menu back"));
     leave_option(menu_manager.current_option_);
     clear_menu(menu_manager.current_menu_);
     menu_manager.collapse();
+    tft.fillScreen(BLACK);
     draw_menu(menu_manager.current_menu_, menu_manager.current_option_, true);
     draw_title();
 }
@@ -407,6 +412,7 @@ AnalysisProcessor* analysis_processor = NULL;
 Calibrator* calibrator = NULL;
 FqSetter* fq_setter = NULL;
 BandSetter* band_setter = NULL;
+UserValueSetter* value_setter = NULL;
 FileBrowser* file_browser = NULL;
 ConfirmDialog* confirm_dialog = NULL;
 
@@ -467,15 +473,15 @@ void enter_option(int32_t option_id) {
             if(band_setter == NULL) {
                 loop_logger.error("could not make an BandSetter");
             }
-            band_setter->initialize();
+            band_setter->initialize(start_fq, end_fq);
             break;
         case MOPT_FQSTEPS:
-            tft.fillScreen(BLACK);
-            draw_title();
+            value_setter = new UserValueSetter();
+            value_setter->initialize("Steps", step_count, 1, 128);
             break;
         case MOPT_Z0:
-            tft.fillScreen(BLACK);
-            draw_title();
+            value_setter = new UserValueSetter();
+            value_setter->initialize("Z0", analyzer.z0_, 1, 999);
             break;
         case MOPT_CALIBRATE:
             calibration_len = step_count;
@@ -566,8 +572,6 @@ void leave_option(int32_t option_id) {
             end_fq = constrain(fq_setter->fq() + (end_fq - start_fq)/2, MIN_FQ, MAX_FQ);*/
             delete fq_setter;
             fq_setter = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
         case MOPT_FQWINDOW: {
             loop_logger.info(String("setting window fq to: ") + fq_setter->fq());
@@ -577,8 +581,6 @@ void leave_option(int32_t option_id) {
             end_fq = constrain(cntFq + fq_setter->fq()/2, MIN_FQ, MAX_FQ);
             delete fq_setter;
             fq_setter = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
         }
         case MOPT_FQSTART:
@@ -587,8 +589,6 @@ void leave_option(int32_t option_id) {
             end_fq = constrain(end_fq, start_fq+1, MAX_FQ);
             delete fq_setter;
             fq_setter = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
         case MOPT_FQEND:
             loop_logger.info(String("setting end fq to: ") + fq_setter->fq());
@@ -596,28 +596,32 @@ void leave_option(int32_t option_id) {
             start_fq = constrain(start_fq, MIN_FQ, end_fq-1);
             delete fq_setter;
             fq_setter = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
         case MOPT_FQBAND:
             band_setter->band(&start_fq, &end_fq);
             loop_logger.info(String("setting start/end to: ") + start_fq + "/" + end_fq);
             delete band_setter;
             band_setter = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
+            break;
+        case MOPT_FQSTEPS:
+            loop_logger.info(String("setting steps to: ") + value_setter->value_);
+            step_count = value_setter->value_;
+            delete value_setter;
+            value_setter = NULL;
+            break;
+        case MOPT_Z0:
+            loop_logger.info(String("setting z0 to: ") + value_setter->value_);
+            analyzer.z0_ = value_setter->value_;
+            delete value_setter;
+            value_setter = NULL;
             break;
         case MOPT_ANALYZE:
             delete analysis_processor;
             analysis_processor = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
         case MOPT_CALIBRATE:
             delete calibrator;
             calibrator = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             analyzer.calibration_len_ = calibration_len;
             break;
         case MOPT_SAVE_RESULTS:
@@ -643,8 +647,6 @@ void leave_option(int32_t option_id) {
             file_browser = NULL;
             delete confirm_dialog;
             confirm_dialog = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
         case MOPT_LOAD_RESULTS:
             if(confirm_dialog->confirm()) {
@@ -662,8 +664,6 @@ void leave_option(int32_t option_id) {
             file_browser = NULL;
             delete confirm_dialog;
             confirm_dialog = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
         case MOPT_SAVE_SETTINGS:
             if(confirm_dialog->confirm()) {
@@ -688,8 +688,6 @@ void leave_option(int32_t option_id) {
             file_browser = NULL;
             delete confirm_dialog;
             confirm_dialog = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
         case MOPT_LOAD_SETTINGS:
             if(confirm_dialog->confirm()) {
@@ -709,20 +707,14 @@ void leave_option(int32_t option_id) {
             file_browser = NULL;
             delete confirm_dialog;
             confirm_dialog = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
         case MOPT_SWR:
             delete graph_context;
             graph_context = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
         case MOPT_SMITH:
             delete graph_context;
             graph_context = NULL;
-            tft.fillScreen(BLACK);
-            draw_title();
             break;
     }
 }
@@ -813,11 +805,12 @@ void handle_option() {
         case MOPT_FQBAND:
             if (band_setter->set_band()) {
                 menu_back();
-                draw_title();
             }
             break;
         case MOPT_FQSTEPS:
-            step_count = set_user_value(step_count, 1, 128, "Steps");
+            if(value_setter->set_value()) {
+                menu_back();
+            }
             break;
         case MOPT_CALIBRATE: {
             if(calibrator->calibration_step()) {
@@ -826,7 +819,9 @@ void handle_option() {
             break;
         }
         case MOPT_Z0:
-            analyzer.z0_ = set_user_value(analyzer.z0_, 1, 999, "Z0");
+            if(value_setter->set_value()) {
+                menu_back();
+            }
             break;
         default:
             loop_logger.error(String("don't know what to do with option ")+menu_manager.current_option_);
