@@ -3,18 +3,25 @@
 
 #include "log.h"
 
-Logger process_logger("process");
+Logger process_logger("process", LOG_DEBUG);
 
 class AnalysisProcessor {
     public:
     void initialize(uint32_t start_fq, uint32_t end_fq, uint16_t steps, AnalysisPoint* results) {
+        start_fq_ = start_fq;
+        end_fq_ = end_fq;
         fq_ = start_fq;
-        steps_ = steps;
-        step_fq_ = (end_fq - start_fq)/steps;
+        if(end_fq > start_fq && steps > 1) {
+            steps_ = steps;
+            step_fq_ = pow(((double)end_fq)/((double)start_fq), 1.0/((double)steps_-1));
+        } else {
+            steps_ = 0;
+            step_fq_ = 1.0;
+        }
         results_ = results;
         result_idx_ = 0;
 
-        process_logger.info(String("analyzing startFq ")+start_fq+" endFq "+end_fq+" steps "+steps);
+        process_logger.info(String("analyzing startFq ")+start_fq+" endFq "+end_fq+" steps "+steps+" step_fq "+step_fq_);
         tft.fillScreen(BLACK);
         draw_title();
         initialize_progress_meter("Analyzing...");
@@ -25,12 +32,11 @@ class AnalysisProcessor {
             return true;
         }
 
-        process_logger.info(String("analyzing fq ")+fq_);
+        process_logger.debug(String("analyzing fq ")+fq_+" idx "+result_idx_);
         Complex z = analyzer.uncalibrated_measure(fq_);
-        process_logger.debug(F("putting into results array"));
         results_[result_idx_] = AnalysisPoint(fq_, z);
-        fq_ += step_fq_;
         result_idx_++;
+        fq_ = next_fq(fq_, result_idx_);
 
         // update progress meter
         draw_progress_meter(steps_, result_idx_);
@@ -40,11 +46,22 @@ class AnalysisProcessor {
 
 
     private:
-    uint32_t fq_;
-    uint32_t step_fq_;
     AnalysisPoint* results_;
-    size_t steps_;
+    uint32_t fq_;
+    double step_fq_;
     size_t result_idx_;
+
+    uint32_t start_fq_;
+    uint32_t end_fq_;
+    size_t steps_;
+
+    uint32_t next_fq(uint32_t fq_, size_t result_idx_) {
+        if(result_idx_ == steps_-1) {
+            return end_fq_;
+        } else {
+            return constrain((uint32_t)round((double)fq_ * step_fq_), start_fq_, end_fq_);
+        }
+    }
 };
 
 enum CAL_STEP { CAL_START, CAL_S_START, CAL_S, CAL_O_START, CAL_O, CAL_L_START, CAL_L, CAL_END };
@@ -58,8 +75,13 @@ class Calibrator {
         start_fq_ = start_fq;
         end_fq_ = end_fq;
         fq_ = start_fq;
-        steps_ = steps;
-        step_fq_ = (end_fq - start_fq)/steps;
+        if(end_fq > start_fq && steps > 1) {
+            steps_ = steps;
+            step_fq_ = pow(((double)end_fq)/((double)start_fq), 1.0/((double)steps_-1));
+        } else {
+            steps_ = 0;
+            step_fq_ = 1.0;
+        }
         results_ = results;
         result_idx_ = 0;
 
@@ -92,10 +114,11 @@ class Calibrator {
                 break;
             case CAL_S:
                 if(result_idx_ < steps_) {
+                    process_logger.debug(String("calibrating ")+fq_);
                     results_[result_idx_].cal_short = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
                     results_[result_idx_].fq = fq_;
                     result_idx_++;
-                    fq_ += step_fq_;
+                    fq_ = next_fq(fq_, result_idx_);
                     draw_progress_meter(steps_, result_idx_);
                 } else {
                     process_logger.info(F("done calibrating short."));
@@ -108,9 +131,10 @@ class Calibrator {
                 break;
             case CAL_O:
                 if(result_idx_ < steps_) {
+                    process_logger.debug(String("calibrating ")+fq_);
                     results_[result_idx_].cal_open = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
                     result_idx_++;
-                    fq_ += step_fq_;
+                    fq_ = next_fq(fq_, result_idx_);
                     draw_progress_meter(steps_, result_idx_);
                 } else {
                     process_logger.info(F("done calibrating open."));
@@ -123,9 +147,10 @@ class Calibrator {
                 break;
             case CAL_L:
                 if(result_idx_ < steps_) {
+                    process_logger.debug(String("calibrating ")+fq_);
                     results_[result_idx_].cal_load = compute_gamma(analyzer_->uncalibrated_measure(fq_), analyzer_->z0_);
                     result_idx_++;
-                    fq_ += step_fq_;
+                    fq_ = next_fq(fq_, result_idx_);
                     draw_progress_meter(steps_, result_idx_);
                 } else {
                     process_logger.info(F("done calibrating load."));
@@ -150,10 +175,18 @@ class Calibrator {
     uint32_t end_fq_;
 
     uint32_t fq_;
-    uint32_t step_fq_;
+    double step_fq_;
     CalibrationPoint* results_;
     size_t steps_;
     size_t result_idx_;
+
+    uint32_t next_fq(uint32_t fq_, size_t result_idx_) {
+        if(result_idx_ == steps_-1) {
+            return end_fq_;
+        } else {
+            return constrain((uint32_t)round((double)fq_ * step_fq_), start_fq_, end_fq_);
+        }
+    }
 };
 
 String frequency_parts_formatter(const uint32_t fq) {

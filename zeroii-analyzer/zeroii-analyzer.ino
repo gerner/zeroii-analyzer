@@ -4,6 +4,8 @@
 #include <Adafruit_GFX.h>    // Core graphics library
 #include "Adafruit_TFTLCD.h"
 
+const __FlashStringHelper* test = F("foobar");
+
 #include <SdFat.h>
 
 #include "RTClib.h"
@@ -466,6 +468,14 @@ void enter_option(int32_t option_id) {
                 loop_logger.error("could not make an BandSetter");
             }
             band_setter->initialize();
+            break;
+        case MOPT_FQSTEPS:
+            tft.fillScreen(BLACK);
+            draw_title();
+            break;
+        case MOPT_Z0:
+            tft.fillScreen(BLACK);
+            draw_title();
             break;
         case MOPT_CALIBRATE:
             calibration_len = step_count;

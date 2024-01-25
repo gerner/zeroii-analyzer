@@ -348,7 +348,7 @@ void shellfn_mv(size_t argc, char* argv[]) {
     target.close();
 
     if(!sd.rename(target_name, new_name)) {
-        Serial.println("remove failed");
+        Serial.println("move failed");
         return;
     }
     Serial.println(String("moved ")+target_name+" to "+new_name);

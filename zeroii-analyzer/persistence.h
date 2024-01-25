@@ -36,7 +36,7 @@ public:
 
     void complete() {
         if(!saw_end_) {
-            persistence_logger.warn("never saw valid end of document");
+            persistence_logger.warn(F("never saw valid end of document"));
             has_error_ = true;
         }
     }
