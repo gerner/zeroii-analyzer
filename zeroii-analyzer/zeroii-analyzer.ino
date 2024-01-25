@@ -110,14 +110,14 @@ Adafruit_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
 // For the one we're using, its 300 ohms across the X plate
 //TouchScreen ts = TouchScreen(XP, YP, XM, YM, 300);
 
-//TODO: cleanup graph.h so it doesn't have to be included here
-#include "graph.h"
-
 //100kHz
 #define MIN_FQ 100000
 //1GHz
 #define MAX_FQ 1000000000
 #define MAX_STEPS 128
+
+//TODO: cleanup graph.h so it doesn't have to be included here
+#include "graph.h"
 
 #define ZERO_I2C_ADDRESS 0x5B
 #define CLK A2
@@ -207,6 +207,7 @@ enum MOPT {
     MOPT_Z0,
     MOPT_SAVE_SETTINGS,
     MOPT_LOAD_SETTINGS,
+    MOPT_ZOOM_SMITH,
 
     MOPT_BACK,
 };
@@ -236,6 +237,7 @@ const MenuOption settings_menu_options[] = {
     MenuOption(F("Z0"), MOPT_Z0, NULL),
     MenuOption(F("Save Settings"), MOPT_SAVE_SETTINGS, NULL),
     MenuOption(F("Load Settings"), MOPT_LOAD_SETTINGS, NULL),
+    MenuOption(F("Zoom Smith Chart"), MOPT_ZOOM_SMITH, NULL),
     MenuOption(F("Back"), MOPT_BACK, NULL),
 };
 Menu settings_menu(NULL, settings_menu_options, sizeof(settings_menu_options)/sizeof(settings_menu_options[0]));
@@ -415,8 +417,8 @@ BandSetter* band_setter = NULL;
 UserValueSetter* value_setter = NULL;
 FileBrowser* file_browser = NULL;
 ConfirmDialog* confirm_dialog = NULL;
-
 GraphContext* graph_context = NULL;
+bool zoom_smith = true;
 
 bool browse_progress() {
     return file_browser->choose_file();
@@ -496,6 +498,7 @@ void enter_option(int32_t option_id) {
             if(graph_context == NULL) {
                 loop_logger.error("could not make a GraphContext");
             }
+            graph_context->initialize_swr();
             graph_context->graph_swr();
             graph_context->draw_swr_pointer();
             graph_context->draw_swr_title();
@@ -506,6 +509,7 @@ void enter_option(int32_t option_id) {
             if(graph_context == NULL) {
                 loop_logger.error("could not make a GraphContext");
             }
+            graph_context->initialize_smith(zoom_smith);
             graph_context->graph_smith();
             graph_context->draw_smith_pointer();
             graph_context->draw_smith_title();
@@ -558,6 +562,10 @@ void enter_option(int32_t option_id) {
                 loop_logger.error("could not make a ConfirmDialog");
             }
             confirm_dialog->initialize(&browse_progress);
+            break;
+        case MOPT_ZOOM_SMITH:
+            value_setter = new UserValueSetter();
+            value_setter->initialize("Zoom Smith Chart", zoom_smith, 0, 1);
             break;
     }
 }
@@ -708,6 +716,12 @@ void leave_option(int32_t option_id) {
             delete confirm_dialog;
             confirm_dialog = NULL;
             break;
+        case MOPT_ZOOM_SMITH:
+            loop_logger.info(String("setting zoom smith: ") + value_setter->value_);
+            zoom_smith = value_setter->value_;
+            delete value_setter;
+            value_setter = NULL;
+            break;
         case MOPT_SWR:
             delete graph_context;
             graph_context = NULL;
@@ -819,6 +833,11 @@ void handle_option() {
             break;
         }
         case MOPT_Z0:
+            if(value_setter->set_value()) {
+                menu_back();
+            }
+            break;
+        case MOPT_ZOOM_SMITH:
             if(value_setter->set_value()) {
                 menu_back();
             }
